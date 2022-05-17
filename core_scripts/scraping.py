@@ -10,18 +10,17 @@ from pandas import DataFrame, read_csv, concat
 from zipfile import ZipFile, ZIP_LZMA
 from bs4 import BeautifulSoup
 from warnings import warn
-from datetime import date 
-from glob import glob
 from time import sleep
 import requests
 import numpy
-import glob
 import math, json, os, re
 
-class TECR_scrape():
+class TECRDB():
     def __init__(self, printing = True):
         # defining the website
         self.printing = printing
+        
+    def scrape(self,):
         root_url = "https://randr.nist.gov/enzyme/DataDetails.aspx?ID="
         end_url = "&finalterm=&data=enzyme"
         
@@ -141,7 +140,7 @@ class TECR_scrape():
             display(combined_df)
         
         # refine the dataframe 
-        combined_df = combined_df.fillna('')
+        combined_df = combined_df.fillna(' ') # prevents spill-over of text
         middle_dataframe_columns = ['T(K)', 'pH ', 'K<sub>c</sub>\' ', 'δ<sub>r</sub>H\'<sup>o</sup>(kJ.mol<sup>-1</sup>)', 'Km\'']
         left_dataframe_columns = ['index', 'Enzyme:', 'Reaction:', 'Reference:', 'Reference ID:'] 
         right_dataframe_columns = list(set(combined_df.columns) - set(left_dataframe_columns) - set(middle_dataframe_columns))
@@ -155,237 +154,219 @@ class TECR_scrape():
             zip.write('TECRDB_scrape.csv')
             os.remove('TECRDB_scrape.csv')
 
-    def amalgamate(self,):
-        def merge_cells(re_search, row_name, row):
+    def amalgamate(self, zip_path = None):
+        def merge_cells(re_search, col_name, printed):
             if re.search(re_search, this_column):
                 solute = re.search(re_search, this_column).group(1)
-                if row[this_column] != '':
-                    if row[row_name] == '':
-                        row[row_name] = row[this_column] + ' ' + solute
-                    if row[this_column] != '':
-                        if row[row_name] != (row[this_column] or row[this_column] + ' ' + solute):
-                            row[row_name] = row[row_name]+' & '+row[this_column]+' '+solute
-                if this_column !=  row_name:
+                if row[this_column] not in [' ', '?']:
+                    if row[col_name] == ' ':
+                        df.at[index, this_column] = str(row[this_column]) + ' ' + solute
+                    if row[this_column] != ' ':
+                        if row[col_name] != (row[this_column] or str(row[this_column]) + ' ' + solute):
+                            df.at[index, this_column] = str(row[col_name])+' & '+str(row[this_column])+' '+solute
+                if this_column !=  col_name:
+                    if not printed:
+                        print('combined\t', this_column)
+                        printed = True
                     combined_columns.add(this_column)
+                    
+            return printed
         
-        df = self.scraped_df.astype(str)
+        # import the scraped data
+        if zip_path == None:
+            df = self.scraped_df
+        else:
+            with ZipFile(zip_path, 'r') as zip:
+                df = read_csv(zip.extract('TECRDB_scrape.csv'))
+        df = df.fillna(' ') # prevents spill-over of text
+        df = df.astype(str)
+        
         combined_columns = set()
         re_searches = {
-            '(?i)(?!Km\')(^K)': 'K<sub>c</sub>\' ', 
-            '(?!Km\')(ë«|Î\´|δ)': 'δ<sub>r</sub>H(cal)/kJ mol<sup>-1</sup>)',
-            '(?!Km\')(I<sub>c)':'I<sub>c</sub>(mol dm<sup>-3</sup>)'
+            '(?<=c\()(\w+\d?\+?)(?<!,)': 'c(glycerol,mol dm<sup>-3</sup>)',
+            '(?<=m\()(\w+\d?\+?)(?<!,)': 'm(MgCl2,mol.kg<sup>-1</sup>)',
+            '(ë«|Î\´|δ)': 'δ<sub>r</sub>H(cal)/kJ mol<sup>-1</sup>)',
+            '(I<sub>c)':'I<sub>c</sub>(mol dm<sup>-3</sup>)',
+            '(?i)(?!Km\' )(^K)': 'K<sub>c</sub>\' ', 
+            '(Km\')(?! )':'Km\' ',
             }
         print('\nColumns:\n', '='*len('Columns:'))
         for this_column in df:
-            print(this_column)
+            printed = False
+            if 'index' in this_column:
+                continue
             for index, row in df.iterrows():
+                # copy entries across all rows
+                if row['Reference ID:'] != ' ':
+                    reference_row = row
+                else:
+                    for row_col, val in row.iteritems():
+                        if val == ' ':
+                            df.at[index, row_col] = reference_row[row_col]
+                
                 # combine similar columns
-                merge_cells('(?<=c\()(\w+\d?\+?)(?<!,)', 'c(glycerol,mol dm<sup>-3</sup>)', row)
-                merge_cells('(?<=m\()(\w+\d?\+?)(?<!,)', 'm(MgCl2,mol.kg<sup>-1</sup>)', row)
-                for re_search, row_name in re_searches.items():
-                    merge_cells(re_search, row_name, row)
-        
-                if this_column in ['buffer(mol dm<sup>-3</sup>)', 'buffer and/or salt ', 'media ', 'buffer ']:
-                    if row[this_column] != '':
-                        if row['Buffer:'] == '':
-                            row['Buffer:'] = row[this_column]
-                        if row['Buffer:'] != '':
+                for re_search, col_name in re_searches.items():
+                    printed = merge_cells(re_search, col_name, printed)
+                if this_column == 'EC Value:':
+                    ecs = []
+                    for ec in row[this_column].split('&'):
+                        if not re.search('((\d+\.)+(\d+|\-)?)', row[this_column]):
+                            df.at[index, this_column] = ' '
+                            break
+                        ecs.append(re.search('((\d+\.)+(\d+|\-)?)', row[this_column]).group().strip())
+                    if df.at[index, this_column] != ' ':
+                        df.at[index, this_column] = ' & '.join(ecs)
+                elif this_column in ['buffer(mol dm<sup>-3</sup>)', 'buffer and/or salt ', 'media ', 'buffer ']:
+                    if not printed:
+                        print('combined\t', this_column)
+                        printed = True
+                    if row[this_column] not in [' ', '?']:
+                        if row['Buffer:'] == ' ':
+                            df.at[index, 'Buffer:'] = row[this_column]
+                        if row['Buffer:'] != ' ':
                             if not re.search(row[this_column], row['Buffer:']):
-                                row['Buffer:'] = row['Buffer:'] + ' + ' + row[this_column]
-                    if this_column !=  'Buffer:':
-                        combined_columns.add(this_column)
-        
-                if this_column in ['salt ', 'cosolvent ', 'added solute ', 'protein ', 'added solute ', 
-                                   'percent(dimethyl sulfoxide) ', 'p(MPa)', 'pMg ']:
-                    if row[this_column] != '':
-                        if ['solvent '] == '':
-                            row['solvent '] = row[this_column]
+                                df.at[index, 'Buffer:'] = str(row['Buffer:']) + ' + ' + row[this_column]
+                    combined_columns.add(this_column)
+                elif this_column in ['salt ', 'cosolvent ', 'added solute ', 'protein ', 'added solute ', 
+                                   'percent(dimethyl sulfoxide) ', 'p(MPa)']:
+                    if not printed:
+                        print('combined\t', this_column)
+                        printed = True
+                    if row[this_column] not in [' ', '?']:
+                        if ['solvent '] == ' ':
+                            df.at[index, 'solvent '] = row[this_column]
                             if this_column == 'p(MPa)':
-                                row['solvent '] = row[this_column] + ' megapascals'  
-                            elif this_column == 'pMg ':
-                                row['solvent '] = row[this_column] + ' = -log[Mg+2]'   
+                                df.at[index, 'solvent '] += ' MPa'  
                             elif this_column == 'percent(dimethyl sulfoxide) ':
-                                row['solvent '] = row[this_column] + ' % DMSO'   
+                                df.at[index, 'solvent '] += ' % DMSO'   
                         else:
                             if not re.search(row[this_column], row['solvent ']):
-                                row['solvent '] = row['solvent '] + '  +  ' + row[this_column]
-        
-                    if this_column !=  'solvent ':
-                        combined_columns.add(this_column)
-                    
-        # rename the base columns
-        df.rename(columns = {'c(glycerol,mol dm<sup>-3</sup>)':'solutes [mol / dm^3]', 
-                             'I<sub>c</sub>(mol dm<sup>-3</sup>)':'Ionic strength [mol / dm^3]', 
-                             'T(K)':'T [K]', 
-                             'I<sub>m</sub>(mol.kg<sup>-1</sup>)':'Ionic strength [mol / kg]', 
-                             'm(MgCl2,mol.kg<sup>-1</sup>)':'solutes [mol / kg]', 
-                             'solvent ':'Experimental conditions', 
-                             'K<sub>c</sub>\' ':'Keq', 
-                             'δ<sub>r</sub>H(cal)/kJ mol<sup>-1</sup>)':'Enthalpy [kJ / mol]'
-                             },
-                  inplace = True)
-                  
+                                df.at[index, 'solvent '] = row['solvent '] + '  +  ' + row[this_column]
+                    combined_columns.add(this_column)
+                else:
+                    if not printed:
+                        print('not combined\t', this_column)
+                        printed = True
+                        
         # delete the combined columns and export
         print('\nCombined columns:')
         for column in combined_columns:
             del df[column]
             print(column)
         for column in df.columns:
-            if re.search('|index|Unnamed', column):
+            if re.search('index|Unnamed', column):
                 print(column)
                 del df[column]
-        self.amalgamated_df = df
-        self.amalgamated_df.to_csv("amalgamated_TECR_scrape.csv")
+        df.rename(columns = {
+            'I<sub>c</sub>(mol dm<sup>-3</sup>)':'Ionic strength [mol/dm^3]', 
+            'δ<sub>r</sub>H(cal)/kJ mol<sup>-1</sup>)':'Enthalpy [kJ/mol]',
+            'I<sub>m</sub>(mol.kg<sup>-1</sup>)':'Ionic strength [molal]', 
+            'c(glycerol,mol dm<sup>-3</sup>)':'solutes [mol/dm^3]', 
+            'm(MgCl2,mol.kg<sup>-1</sup>)':'solutes [molal]', 
+            'solvent ':'Experimental conditions', 
+            'K<sub>c</sub>\' ':'Keq', 
+            'pMg ': '-log[Mg+2]',
+            'Km\' ': 'Km\'',
+            'T(K)':'T [K]',
+            'pH ':'pH'
+            }, inplace = True)
         
-        # acquire a list of all enzymes
-        enzyme_list, enzymes = [], []
-        for index, row in df.iterrows():
-            if row['Enzyme:'] not in enzyme_list and row['Enzyme:'] != '':
-                enzyme_list.append(row['Enzyme:'])      
-        for original_enzyme in enzyme_list:
-            enzymes.append(re.search('(\w.*)',original_enzyme).group())
+        self.amalgamated_df = df
+        self.amalgamated_df.to_csv("amalgamated_TECR_scrape.csv") 
             
         # count down for processing and organizing the data
+        def assign_values(col, reference_list, values_list, temperatures_list, ph_list, added):
+            reference_list.append(False)   
+            if row[col] != ' ':
+                cleaned_keq = re.search('(\-?\d+\.?\d*)', str(row[col])).group()
+                values_list.append(float(cleaned_keq)) 
+                reference_list[-1] = True
+                if not added:
+                    temperatures.append(row['T [K]'])
+                    ph_list.append('nan')
+                    if row['pH'] != ' ':
+                        ph_list[-1] = row['pH']
+                    added = True
+                        
+            return reference_list, values_list, temperatures_list, ph_list, added
+        
+        # acquire a list of all enzymes
+        enzyme_list = []
+        for index, row in df.iterrows():
+            if row['Enzyme:'] not in enzyme_list and row['Enzyme:'] != ' ':
+                enzyme_list.append(row['Enzyme:'])            
+        enzymes = [re.search('(\w.*)',original_enzyme).group() for original_enzyme in enzyme_list]
         data_per_enzyme = {}
-        total_entries, count = 3979, 1
+        count = 1
         for enzyme in enzymes:
-            print('The data is being assembled and organized ... {}/425'.format(count), end = '\r')
+            print(f'The data is being assembled and organized ... {count}/425', end = '\r')
             
             # lists of the database variables
-            keq_values_per_enzyme = []
-            km_values_per_enzyme = []
-            enthalpy_values_per_enzyme = []
-            temperatures_per_enzyme = []
-            phs_per_enzyme = []
-            
-            # lists of identifying whether the reference contains the identified variable 
-            references_of_an_enzyme = []
-            reaction_of_an_enzyme = []
-            km_in_the_reference = []
-            enthalpy_in_the_reference = []
-            keqs_in_a_reference = []
+            added = False
+            Keq_values, km_values, enthalpy_values, temperatures, phs= [], [], [], [], []
+            references, reactions, kms, enthalpies, keqs = [], [], [], [], []
             for index, row in df.iterrows():
-                iteration = 0
+                iteration = 1
                 if row['Enzyme:'] == ' '+enzyme:
-                    reaction_of_an_enzyme.append(row['Reaction:'])
-                    references_of_an_enzyme.append('Ibid')
-                    if row['Reference:'] != '':
-                        references_of_an_enzyme[-1] = row['Reference:']
+                    reactions.append(row['Reaction:'])
+                    references.append('Ibid')
+                    if row['Reference:'] != ' ':
+                        references[-1] = row['Reference:']
                     
-                    # clean keqs are added to a list
-                    keqs_in_a_reference.append(False)   
-                    if row['Keq'] != '':
-                        cleaned_keq = re.search('(\-?\d+\.?\d*)', row['Keq'])
-                        keq_values_per_enzyme.append(float(cleaned_keq.group())) 
-                        keqs_in_a_reference[-1] = True
-                        temperatures_per_enzyme.append(row['T [K]'])
-                        phs_per_enzyme.append('nan')
-                        if df.at[index, 'pH '] != '':
-                            phs_per_enzyme[-1] = row['pH ']
-                        
-                    # clean kms are added to a list
-                    km_in_the_reference.append(False)
-                    if row['Km'] != '':
-                        cleaned_km = re.search('(\-?\d+\.?\d*)', row['Km'])
-                        km_values_per_enzyme.append(float(cleaned_km.group())) 
-                        km_in_the_reference[-1] = True
-                        if row['Keq'] == '':
-                            temperatures_per_enzyme.append(row['T [K]'])
-                            phs_per_enzyme.append('nan')
-                            if df.at[index, 'pH '] != '':
-                                phs_per_enzyme[-1] = row['pH ']
-                        
-                    # clean enthalpy values are added to a list
-                    enthalpy_in_the_reference.append(False)
-                    if row['Enthalpy [kJ / mol]'] != '':
-                        cleaned_enthalpy = re.search('(\-?\d+\.?\d*)', '%s' %(row['Enthalpy [kJ / mol]']))
-                        enthalpy_in_the_reference[-1] = True
-                        enthalpy_values_per_enzyme.append(float(cleaned_enthalpy.group())) 
-                        if row['Keq'] == '' and row['Km'] == '':
-                            temperatures_per_enzyme.append(row['T [K]'])
-                            phs_per_enzyme.append('nan')
-                            if row['pH '] != '':
-                                phs_per_enzyme[-1] = row['pH ']
+                    # values are organized into lists
+                    keqs, Keq_values, temperatures, phs, added = assign_values('Keq', keqs, Keq_values, temperatures, phs, added)                        
+                    kms, km_values, temperatures, phs, added = assign_values('Km\'', kms, km_values, temperatures, phs, added)                        
+                    enthalpies, enthalpy_values, temperatures, phs, added = assign_values(
+                        'Enthalpy [kJ/mol]', enthalpies, enthalpy_values, temperatures, phs, added
+                        )                        
                         
                     #loop through the unlabeled rows of each enzyme
-                    while df.at[index + iteration, 'Enzyme:'] == '':
-                        keqs_in_a_reference.append(False)
-                        if row['Keq'] != '':
-                            cleaned_keq = re.search('(\-?\d+\.?\d*)', row['Keq'])
-                            keq_values_per_enzyme.append(float(cleaned_keq.group())) 
-                            keqs_in_a_reference[-1] = True
-                            temperatures_per_enzyme.append(df.at[index, 'T [K]'])
-                            phs_per_enzyme.append('nan')
-                            if row['pH '] != '':
-                                phs_per_enzyme[-1] = row['pH ']
-                            
-                        #clean kms are added to a list
-                        km_in_the_reference.append(False)
-                        if df.at[index, 'Km'] not in empty_cell:
-                            cleaned_km = re.search('(\-?\d+\.?\d*)', '%s' %(df.at[index, 'Km']))
-                            km_in_a_reference[-1] = True
-                            km_values_per_enzyme.append(float(cleaned_km.group())) 
-                            if df.at[index, 'Keq'] == '':
-                                phs_per_enzyme.append('nan')
-                                temperatures_per_enzyme.append(df.at[index, 'T [K]'])
-                                if df.at[index, 'pH '] not in empty_cell:
-                                    phs_per_enzyme[-1] = row['pH ']
-                            
-                        # clean enthalpy values are added to a list
-                        enthalpy_in_the_reference.append(False)
-                        if df.at[index, 'Enthalpy [kJ / mol]'] != '':
-                            cleaned_ethalpy = re.search('(\-?\d+\.?\d*)', row['Enthalpy [kJ / mol]'])
-                            enthalpy_in_the_reference[-1] = True
-                            enthalpy_values_per_enzyme.append(float(cleaned_enthalpy.group())) 
-                            if row['Keq'] == '' and row['Km'] == '':
-                                temperatures_per_enzyme.append(row['T [K]'])
-                                phs_per_enzyme.append('nan')
-                                if row['pH '] != '':
-                                    phs_per_enzyme.append(row['pH '])
-                            
-                        #proceed to the next loop
-                        if iteration + index < total_entries:
-                            iteration += 1
+                    while iteration + index < len(df) and df.at[index + iteration, 'Enzyme:'] == ' ':
+                        keqs, Keq_values, temperatures, phs, added = assign_values('Keq', keqs, Keq_values, temperatures, phs, added)                        
+                        kms, km_values, temperatures, phs, added = assign_values('Km\'', kms, km_values, temperatures, phs, added)                        
+                        enthalpies, enthalpy_values, temperatures, phs, added = assign_values(
+                            'Enthalpy [kJ/mol]', enthalpies, enthalpy_values, temperatures, phs, added
+                            )         
+                        iteration += 1
         
             # statistical processing of scraped values
-            average_keq_per_enzyme = standard_deviation_keq_per_enzyme = average_km_per_enzyme = standard_deviation_km_per_enzyme = average_enthalpy_per_enzyme = standard_deviation_enthalpy_per_enzyme = 'nan' 
-            if len(keq_values_per_enzyme) != 0:
-                average_keq_per_enzyme = numpy.mean(keq_values_per_enzyme)
-                standard_deviation_keq_per_enzyme = numpy.std(keq_values_per_enzyme) 
-            if len(km_values_per_enzyme) != 0:
-                average_km_per_enzyme = numpy.mean(km_values_per_enzyme)
-                standard_deviation_km_per_enzyme = numpy.std(km_values_per_enzyme)
-            if len(enthalpy_values_per_enzyme) != 0:
-                average_enthalpy_per_enzyme = numpy.mean(enthalpy_values_per_enzyme)
-                standard_deviation_enthalpy_per_enzyme = numpy.std(enthalpy_values_per_enzyme)                 
+            average_keq = std_keq = average_km = std_km = average_enthalpy = std_enthalpy = 'nan' 
+            if len(Keq_values) != 0:
+                average_keq, std_keq = numpy.mean(Keq_values), numpy.std(Keq_values)
+            if len(km_values) != 0:
+                average_km, std_km = numpy.mean(km_values), numpy.std(km_values)
+            if len(enthalpy_values) != 0:
+                average_enthalpy, std_enthalpy = numpy.mean(enthalpy_values), numpy.std(enthalpy_values) 
                 
             #store the information into a nested dictionary structure
-            data_per_enzyme[enzyme] = {'reaction':reaction_of_an_enzyme,
-                                       'experimental temperatures':temperatures_per_enzyme,
-                                       'experimental phs':phs_per_enzyme,
-                                       'keq reference':references_of_an_enzyme,
-                                       'Keq':{'keq values in the reference':keqs_in_a_reference,
-                                              'keqs':keq_values_per_enzyme, 
-                                              'keq quantity':len(keq_values_per_enzyme), 
-                                              'keq average':average_keq_per_enzyme, 
-                                              'keq standard deviation':standard_deviation_keq_per_enzyme
+            data_per_enzyme[enzyme] = {'reaction':reactions,
+                                       'experimental temperatures':temperatures,
+                                       'experimental phs':phs,
+                                       'keq reference':references,
+                                       'Keq':{'keq values in the reference':keqs,
+                                              'keqs':Keq_values, 
+                                              'keq quantity':len(Keq_values), 
+                                              'keq average':average_keq, 
+                                              'keq standard deviation':std_keq
                                               },
-                                       'Km':{'km values in the reference':km_in_the_reference,
-                                             'km values':km_values_per_enzyme,
-                                             'km average':average_km_per_enzyme,
-                                             'km standard deviation':standard_deviation_km_per_enzyme
+                                       'Km':{'km values in the reference':kms,
+                                             'km values':km_values,
+                                             'km average':average_km,
+                                             'km standard deviation':std_km
                                              },
-                                       'Enthalpy':{'enthalpy values in the reference':enthalpy_in_the_reference,
-                                                   'enthalpy values':enthalpy_values_per_enzyme,
-                                                   'enthalpy average':average_enthalpy_per_enzyme,
-                                                   'enthalpy standard deviation':standard_deviation_enthalpy_per_enzyme
+                                       'Enthalpy':{'enthalpy values in the reference':enthalpies,
+                                                   'enthalpy values':enthalpy_values,
+                                                   'enthalpy average':average_enthalpy,
+                                                   'enthalpy standard deviation':std_enthalpy
                                                    }
                                       }
             count += 1
         
         #export the database dictionary as a JSON file
         with open('TECR_consolidated.json', 'w') as output:
-            json.dump('TECR_consolidated.json', output, indent = 4)
-        with ZipFile('TECRDB.zip', 'a', compression = ZIP_LZMA) as zip:
-            zip.write('TECR_consolidated.json')
-            os.remove('TECR_consolidated.json')
+            json.dump(data_per_enzyme, output, indent = 4)
+        sleep(2)
+        with ZipFile('TECRDB.zip', 'w', compression = ZIP_LZMA) as zip:
+            for file in ['TECR_consolidated.json', 'amalgamated_TECR_scrape.csv', 'TECRDB_scrape.csv']:
+                zip.write(file)
+                os.remove(file)

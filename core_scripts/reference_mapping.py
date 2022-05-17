@@ -1,22 +1,19 @@
 # import modules
-from datetime import date
-import httpx
-import pandas
-from io import StringIO
 from more_itertools import chunked
 from tqdm.notebook import tqdm
+from datetime import date
+from pymed import PubMed
+from io import StringIO
+import httpx
 import re
 
 CHUNK_SIZE = 100
-
 
 class reference_mapping():
     def __init__(self):
         pass
         
     def create_mappings(self, mappings_path, export = False):
-        from pymed import PubMed
-        
         # load the CSV file and 
         req = httpx.request("GET", mappings_path)
         s = StringIO(req.content.decode("UTF-8"))
