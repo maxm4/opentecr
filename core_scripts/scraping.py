@@ -31,9 +31,6 @@ class TECRDB():
         total_entries = math.floor(1*len(body))
 
         # defining the boundaries of the dataframe section
-        index_count = loop_count = name_iteration = 0
-        output_loop = 1   
-        
         # open the requests session
         session = requests.Session()
         adapter = HTTPAdapter(max_retries = Retry(connect=3, backoff_factor=0.5))
@@ -43,6 +40,7 @@ class TECRDB():
         if not os.path.exists('TECR_scraping'):
             os.mkdir('TECR_scraping')
 
+        index_count = loop_count = name_iteration = 0
         entry_dfs = []
         for id_row in range(1, total_entries):   
             id_value = body[id_row].find("a").text

@@ -1,11 +1,11 @@
-from to_precision import sci_notation
 from datetime import date
 from numpy import nan, unique
-import pandas
+from pandas import read_csv
+from warnings import warn
+import sigfig
 import json
 import re
 
-empty = [nan, 'nan', None, ' ', '', 'NaN']
 freiburger_index = None
 
 # homogenize the charge format    
@@ -22,122 +22,92 @@ def isnumber(string):
             return True
         except:
             try:
-                string.isnumeric()
+                int(string)
                 return True
             except:
                 return False 
 
 class merge_package():
-    def __init__(self, master_dataframe, new_dataframe, scraping):
+    def __init__(self, master_path, new_path, scraping):
         self.scraping = scraping
-        self.master_file = master_dataframe        
-        self.new_file = new_dataframe
-        self.original_master_file_length = len(self.master_file)
+        with open(master_path) as master:
+            self.master_file = read_csv(master)
+            self.original_master_file_length = len(self.master_file)
+        with open(new_path) as new:
+            self.new_file = read_csv(new)
         
-    def merge(self, new_enzyme_column_name, new_reference_column_name, manual_curation_csv_path, export = False):
-        self.add_new(new_enzyme_column_name, new_reference_column_name)
+    def merge(self, new_enzyme_col, new_reference_col, manual_curation_csv_path, export = False):
+        self.add_rows(new_enzyme_col, new_reference_col)
         self.merge_existing()
         self.incorporate_manual_curation(manual_curation_csv_path, export)
         self.confirm_merging()
-        
         return self.master_file
         
-    # =================================================================
-        
-    def add_new(self, new_enzyme_column_name, new_reference_column_name, master_enzyme_column_name = 'Enzyme:', master_reference_column_name = 'Reference ID:', export = False):
+    def add_rows(self, new_enzyme_col, new_reference_col, master_enzyme_column_name = 'Enzyme:', 
+                master_reference_col = 'Reference ID:', export = False):
         # compare the enzymes
-        new_enzymes = set(self.new_file[new_enzyme_column_name])  
-        master_enzymes = set()
-        for enzyme in self.master_file[master_enzyme_column_name]:
-            if enzyme not in empty:
-                enzyme = enzyme.strip()
-                master_enzymes.add(enzyme)
-        
+        new_enzymes = set(self.new_file[new_enzyme_col])  
+        master_enzymes = set([enzyme.strip() for enzyme in self.master_file[master_enzyme_column_name] if enzyme != ' '])
         missing_master_enzymes = self.set_contrast('enzymes', master_enzymes, new_enzymes, 'new file')
         
         # compare the references
-        new_references = set(self.new_file[new_reference_column_name])
-        master_references = set()
-        for reference in self.master_file[master_reference_column_name]:
-            if reference not in empty:
-                substituted_reference = re.sub('_.+', '', reference)
-                master_references.add(substituted_reference)
-        
+        new_references = set(self.new_file[new_reference_col])
+        master_references = set([re.sub('_.+', '', reference) for reference in self.master_file[master_reference_col] if reference != ' '])
         missing_master_references = self.set_contrast('references', master_references, new_references, 'new file')
         
-        print('before', len(self.master_file))
+        original_master_length = self.master_file
         
         # add new data rows
         self.new_additions = set()
         for new_index, new_row in self.new_file.iterrows():
-            new_enzyme = new_row[new_enzyme_column_name]
-            new_reference = new_row[new_reference_column_name]
-            # add undescribed enzymes and citations
-            if new_reference in missing_master_references:
-                #print(new_reference)
-                # add a new row at the end of master dataframe, according to master column organization
-                self.master_file.loc[len(self.master_file.index)] = self.define_row(new_index, new_row, self.scraping)
-                self.new_additions.add(new_index)
-            elif new_enzyme in missing_master_enzymes:
-                #print(new_enzyme)
-                # add a new row at the end of master dataframe, according to master column organization
-                self.master_file.loc[len(self.master_file.index)] = self.define_row(new_index, new_row, self.scraping)
+            if new_row[new_reference_col] in missing_master_references or new_row[new_enzyme_col] in missing_master_enzymes:
+                self.master_file.loc[len(self.master_file.index)] = self._define_row(new_index, new_row, self.scraping)
                 self.new_additions.add(new_index)
        
         # format the magnesium potential
-        undescribed = list(self.master_file['Experimental conditions'])[self.original_master_file_length + 1 :]
-        for row in undescribed:
+        undescribed = list(self.master_file['Experimental conditions'])[self.original_master_file_length+1:]
+        for index, row in enumerate(undescribed):
             if isnumber(row):
-                index = list(self.master_file['Experimental conditions']).index(row)
-                self.master_file.at[index, 'Experimental conditions'] = '{} = -log[Mg+2]'.format(str(row))
+                self.master_file.at[index+self.original_master_file_length+1, 'Experimental conditions'] = '{} = -log[Mg+2]'.format(str(row))
 
-        if export:
+        if export: #!!! relegate to a dedicated export function
             self.master_file.to_csv(f'{date.today()}_master_TECR_1.csv')
             
-        print('after', len(self.master_file))
+        if original_master_length == len(self.master_file):
+            warn(f'CodeError: The master file has not changed length.')
         print('total additions', len(list(self.new_additions)))
-        
             
     def merge_existing(self, export = False):
-        matched_master_indices = {}
-        display_count = 0
-        unmatched_entries = 0
-        errors_dictionary = {}
+        matched_master_indices, errors_dictionary = {}, {}
+        display_count = unmatched_entries = 0
         for new_index, new_row in self.new_file.iterrows():
             if new_index not in self.new_additions:
                 matched_datum = False
 
                 # define the new values for this datum 
-                row = self.define_row(new_index, new_row, self.scraping) # [freiburger_index, du_index, noor_index, add_enzyme, add_kegg_reaction, add_cid_reaction, add_reaction, reference_string, add_reference, add_temperature, add_ph, add_k, km, add_method, buffer, add_pmg, add_ec, solutes_1, solutes_2, ionic_strength_1, add_ionic_strength, enthalpy]
-                new_enzyme = row[3]
-                new_reaction = row[6]
-                new_reference = row[8]
-                new_temperature = row[9]
-                new_ph = row[10]
-                new_k = row[11]
+                (freiburger_index, du_index, noor_index, new_enzyme, add_kegg_reaction, add_cid_reaction, new_reaction, reference_string, new_reference, 
+                 new_temperature, new_ph, new_k, km, add_method, buffer, add_pmg, add_ec, solutes_1, solutes_2, ionic_strength_1, add_ionic_strength,
+                 enthalpy) = self._define_row(new_index, new_row, self.scraping)
 
                 # determine the set of possible matches
                 errors = []
-                matching_master_subset = self.master_file.loc[(self.master_file['Enzyme:'] == new_enzyme)]    #  & (master_file['Keq'] == new_k) & (master_file['T [K]'] == new_temperature) & (master_file['pH '] == new_ph)
+                matching_master_subset = self.master_file.loc[(self.master_file['Enzyme:'] == new_enzyme)]    #  & (master_file['Keq'] == new_k) & (master_file['T [K]'] == new_temperature) & (master_file['pH '] == new_ph)   #!!! other criteria besides the name should be considered for matching.
                 for master_index, master_row in matching_master_subset.iterrows():  
                     # remove previously matched rows
                     if master_index in matched_master_indices:
-                        error = ''.join([str(x) for x in [master_index, '___','previously matched master_index to the new_index:', '___', matched_master_indices[master_index]]])
-                        errors.append(error)
+                        error = f'previously matched master_index {master_index} to the new_index {matched_master_indices[master_index]}.'
+                        warn(error), errors.append(error)
                         continue
 
                     # define the master values for this datum 
-                    master_reference_id, master_reaction, master_temperature, master_ph, master_k = self.define_row(master_index, master_row, scraping_name = 'master')
-
-                    # match the reference
+                    master_reference_id, master_reaction, master_temperature, master_ph, master_k = self._define_row(master_index, master_row, scraping_name = 'master')
                     if new_reference != master_reference_id:
-                        error = ''.join([str(x) for x in [master_index, '___', 'reference', '___', new_reference, '___', master_reference_id]])
-    #                     print(error)
-                        errors.append(error)
+                        error = f'previously matched master_index {master_index} reference {master_reference_id} with {new_reference}.'
+                        warn(error), errors.append(error)
                         continue
 
                     # match the temperature
-                    if (new_temperature and master_temperature) not in empty:
+                    if (new_temperature and master_temperature) not in empty: #!!! Adapt the function from AMALGAMATE in the scraping script
                         new_temperature = re.sub('l', '1', str(new_temperature))
                         master_temperature = re.sub('l', '1', str(master_temperature))
                         if self.rounding(new_temperature) != self.rounding(master_temperature):
@@ -297,7 +267,7 @@ class merge_package():
                     
                     if new_id not in list(self.master_file[f'{self.scraping}_index']):
                         if add:
-                            self.master_file.loc[len(self.master_file.index)] = self.define_row(new_id, new_row, self.scraping)  
+                            self.master_file.loc[len(self.master_file.index)] = self._define_row(new_id, new_row, self.scraping)  
                         elif merge:
                             # match the standard id with the master_index
                             match_index = new_ids.index(new_id)
@@ -347,9 +317,7 @@ class merge_package():
         print('missing unique indices', missing_unique_indices)
         return missing_unique_indices
     
-    # ===================================================================================================
-        
-    def define_row(self, new_index, new_row, scraping_name):
+    def _define_row(self, new_index, new_row, scraping_name):
         # define the Noor scraping
         if scraping_name == 'noor':
             du_index = None
@@ -535,7 +503,7 @@ class merge_package():
         if master_row[f'{self.scraping}_index'] not in empty:
             print('proposed new index', new_index)
             print('--> ERROR: The master_index < {} > is predefined as < {} >.'.format(master_index, master_row[f'{self.scraping}_index']))
-            self.master_file.loc[len(self.master_file.index)] = self.define_row(new_index, new_row, self.scraping)
+            self.master_file.loc[len(self.master_file.index)] = self._define_row(new_index, new_row, self.scraping)
         else:
             self.master_file.at[master_index, f'{self.scraping}_index'] = new_index
     
@@ -565,4 +533,4 @@ class merge_package():
         if self.scraping == 'noor':
             return float(number)
         elif self.scraping == 'du':
-            return sci_notation(number, 2)
+            return sigfig.round(number, 2)

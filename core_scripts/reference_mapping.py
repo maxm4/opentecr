@@ -1,89 +1,87 @@
 # import modules
+from pandas import read_csv, isnull, DataFrame
+from zipfile import ZipFile, ZIP_LZMA
 from more_itertools import chunked
-from tqdm.notebook import tqdm
-from datetime import date
 from pymed import PubMed
 from io import StringIO
 import httpx
-import re
+import re, os
 
 CHUNK_SIZE = 100
 
-class reference_mapping():
-    def __init__(self):
-        pass
+class mapRef():
+    def __init__(self, mappings_url, zip_path = None, file_path = None, ):
+        # load the CSV file and reference mappings
+        request = httpx.request("GET", mappings_url)
+        self.tecr_refs = read_csv(StringIO(request.content.decode("UTF-8")))
+        if zip_path is not None:
+            with ZipFile(zip_path, 'r') as zip:
+                df = read_csv(zip.extract('amalgamated_TECR_scrape.csv'))
+                os.remove('amalgamated_TECR_scrape.csv')
+        elif file_path is not None:
+            with open(file_path, 'r') as file:
+                df = read_csv(file)     
+        else:
+            raise TypeError('The TECR data must be specified to complete mapping.')
+        df = df.fillna(' ') # prevents spill-over of text
+        df = df.astype(str)
+        for column in df:
+            if re.search('Unnamed', column):
+                del df[column]
+            # if column =='Reference ID:':
+            #     df[column] = [re.sub('(_.+)', '', str(entry)) for entry in self.tecrdb[df]]
+        self.tecrdb = df
         
-    def create_mappings(self, mappings_path, export = False):
-        # load the CSV file and 
-        req = httpx.request("GET", mappings_path)
-        s = StringIO(req.content.decode("UTF-8"))
-        tecr_refs = pd.read_csv(s)
-        tecr_refs.head()
-
+    def apply(self, reference_ids_column, doi_column, pmid_column, export = False):
         # load references from PubMed
-        tecr_refs_with_pubmed_id = tecr_refs[~pd.isnull(tecr_refs.pmid)].copy()
-        tecr_refs_with_pubmed_id["pmid"] = tecr_refs_with_pubmed_id.pmid.astype(int).astype(str)
+        tecr_refs_with_pubmed_id = self.tecr_refs[~isnull(self.tecr_refs.pmid)].copy()  # NOT null entries
+        tecr_refs_with_pubmed_id["pmid"] = tecr_refs_with_pubmed_id.pmid.astype(int).astype(str) # remove decimals
         print(f"Collected {tecr_refs_with_pubmed_id.shape[0]} PubMed IDs")
 
         # parse the references for DOIs
         pubmed = PubMed(tool="MyTool", email="elad.noor@weizmann.ac.il")
-
         data = []
-        with tqdm("downloading metadata from PubMed", total=tecr_refs_with_pubmed_id.shape[0]) as pbar:
-            for rows in chunked(tecr_refs_with_pubmed_id.itertuples(), CHUNK_SIZE):
-                pubmed_ids = " ".join([str(r.pmid) for r in rows])
-                results = pubmed.query(pubmed_ids)
-                for paper in results:
-                    try:
-                        doi = paper.pubmed_doi
-                    except AttributeError:
-                        doi = None
+        count = 0
+        for rows in chunked(tecr_refs_with_pubmed_id.itertuples(), 100):
+            print(f'{count}/{tecr_refs_with_pubmed_id.shape[0]} references are mapped.', end='\r')
+            pubmed_ids = " ".join([str(row.pmid) for row in rows])
+            results = pubmed.query(pubmed_ids)
+            for paper in results:
+                try:
+                    doi = paper.pubmed_doi
+                except AttributeError:
+                    doi = None
 
-                    pmid = paper.pubmed_id.split("\n")[0]
-                    pbar.set_description_str(f"pubmed ID {pmid}")
-                    authors = ", ".join([d["lastname"] + (" " + d["firstname"] if d["firstname"] else "") for d in paper.authors])
-                    data.append((str(pmid), doi, paper.publication_date.year, authors, paper.abstract))
-                pbar.update(len(rows))
+                pmid = str(paper.pubmed_id.split("\n")[0])
+                authors = ", ".join([author["lastname"] + (" " + author["firstname"] if author["firstname"] else "") for author in paper.authors])
+                data.append((pmid, doi, paper.publication_date.year, authors, paper.abstract))
+            count += len(rows)
 
         # export the parsed information into a new CSV
-        _df = pd.DataFrame(data=data, columns=["pmid", "doi", "year", "authors", "abstract"])
-        self.mappings = _df.join(tecr_refs_with_pubmed_id.set_index("pmid"), on="pmid", lsuffix="_from_pubmed", rsuffix="_from_robert")
+        mappings = DataFrame(data=data, columns=["pmid", "doi", "year", "authors", "abstract"])
+        self.mappings = mappings.join(tecr_refs_with_pubmed_id.set_index("pmid"), on="pmid", lsuffix="_from_pubmed", rsuffix="_from_Robert")
         
-        if export:
-            self.mappings.to_csv("references_with_abstracts.csv")
+        # DOI and PMID columns are added to the TECRDB file
+        new_column = [' ' for row in range(len(self.tecrdb))]
+        self.tecrdb.insert(4, 'PMID', new_column)
+        self.tecrdb.insert(5, 'DOI', new_column)
 
-    @staticmethod
-    def apply_mapping(master_file, mappings, reference_ids_column, doi_column, pmid_column, export = False):
-    
-        # import the master_file and reference_file
-        for column in master_file:
-            if re.search('Unnamed', column):
-                del master_file[column]
-            if column =='Reference ID:':
-                master_file[column] = [re.sub('(_.+)', '', str(entry)) for entry in master_file[column]]
-
-        # DOI and PMID columns are added to the master_file
-        new_column = [' ' for row in range(len(master_file))]
-        master_file.insert(6, 'PMID', new_column)
-        master_file.insert(7, 'DOI', new_column)
-
-        reference_ids = mappings[reference_ids_column]
         references_added = 0
-        for index, reference in reference_ids.iteritems():
-            if (mappings.at[index, 'pmid'] or mappings.at[index, doi_column]) not in [' ']:
-                reference = re.sub('(_.+)', '', reference)
-                matching_master_subset = master_file.loc[master_file['Reference ID:'] == reference]
-
+        for index, row in self.mappings.iterrows():
+            if (row['pmid'] or row[doi_column]) != ' ':
+                matching_master_subset = self.tecrdb.loc[self.tecrdb['Reference ID:'] == row[reference_ids_column]]
                 for master_index, match in matching_master_subset.iterrows():
-                    master_file.at[master_index, 'PMID'] = mappings.at[index, pmid_column]
-                    master_file.at[master_index, 'DOI'] = mappings.at[index, doi_column]
-
+                    self.tecrdb.at[master_index, 'PMID'] = self.mappings.at[index, pmid_column]
+                    self.tecrdb.at[master_index, 'DOI'] = self.mappings.at[index, doi_column]
                     references_added += 1
-
         print(f'References added to {references_added} datums')
 
-        # export the indentifier-ingrained CSV
-        if export:
-            master_file.to_csv(f'{date.today()}_mapped_master.csv')
+        # export the dataframe
+        self.tecrdb.to_csv('mapped_TECRDB_scrape.csv')
+        self.mappings.to_csv("references_with_abstracts.csv")
+        with ZipFile('TECRDB.zip', 'a', compression = ZIP_LZMA) as zip:
+            for file in ['mapped_TECRDB_scrape.csv', "references_with_abstracts.csv"]:
+                zip.write(file)
+                os.remove(file)
             
-        return master_file
+        return self.tecrdb
