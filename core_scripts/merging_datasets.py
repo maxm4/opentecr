@@ -1,12 +1,10 @@
-from datetime import date
-from numpy import nan, unique
-from pandas import read_csv
+from pandas import read_csv, DataFrame, read_excel
+from openpyxl import load_workbook
+from itertools import islice
+from numpy import nan, diff
 from warnings import warn
 import sigfig
-import json
-import re
-
-freiburger_index = None
+import json, re, os
 
 # homogenize the charge format    
 def charge_format(master_reaction):                                
@@ -19,202 +17,182 @@ def isnumber(string):
     if string not in ['', ' ', nan]:
         try:
             float(string)
-            return True
         except:
             try:
                 int(string)
-                return True
             except:
                 return False 
+        return True
 
-class merge_package():
-    def __init__(self, master_path, new_path, scraping):
-        self.scraping = scraping
-        with open(master_path) as master:
-            self.master_file = read_csv(master)
-            self.original_master_file_length = len(self.master_file)
-        with open(new_path) as new:
-            self.new_file = read_csv(new)
+class merge_TECRs():
+    def __init__(self, master_path):
+        self.master_path = master_path
+        if not os.path.exists('TECRDB'):
+            os.mkdir('TECRDB')
+        with open(master_path, encoding='utf-8') as master:
+            self.master_file = read_csv(master, dtype = 'object')
+            self.master_file.fillna(' ')
+            self.master_file.index.name = 'NIST_index'
+            del self.master_file['Unnamed: 0']
+            
+            # insert the relevant columns
+            empty_col = [' ' for row in range(len(self.master_file))]  
+            self.master_file.insert(0, 'noor_index', empty_col)  
+            self.master_file.insert(0, 'du_index', empty_col)
+            self.master_file.insert(0, 'NIST_index', self.master_file.index)
+            self.master_file.insert(4, 'KEGG Reaction:', empty_col)
+            self.master_file.insert(5, 'CID Reaction:', empty_col)
         
-    def merge(self, new_enzyme_col, new_reference_col, manual_curation_csv_path, export = False):
-        self.add_rows(new_enzyme_col, new_reference_col)
-        self.merge_existing()
-        self.incorporate_manual_curation(manual_curation_csv_path, export)
-        self.confirm_merging()
+    def merge(self, new_path, new_enzyme_col, new_reference_col, manual_curation_csv_path, excel_sheet):
+        self.scraping = new_path.split('_')[-1].split('.')[0]
+        print(self.scraping)
+        if '.csv' in new_path:
+            with open(new_path, encoding='utf-8') as new:
+                self.new_file = read_csv(new, dtype = 'object')
+                self.new_file.fillna(' ')
+        elif '.xlsx' in new_path:
+            ws = load_workbook(new_path)[excel_sheet]
+            data = (islice(r, 1, None) for r in list(ws.values))
+            self.new_file = DataFrame(data, index=[r[0] for r in ws.values], columns=next(ws.values)[1:])
+            self.new_file.drop(self.new_file.index[0], inplace=True)
+            self.new_file.insert(0, 'Enzyme', self.new_file.index)
+            self.new_file.index = [x for x in range(len(self.new_file.index))]
+            self.new_file.fillna(' ')
+            # print(self.new_file.head())
+        self._add_rows(new_enzyme_col, new_reference_col)
+        self._merge_existing()
+        self._incorporate_manual_curation(manual_curation_csv_path)
+        self._confirm_merging()
+        
+        # export the processes database file
+        self.master_file.to_csv(os.path.join('TECRDB', 'merged_TECRDB.csv'))
+        # sleep(2)
+        # with ZipFile('TECRDB.zip', 'w', compression = ZIP_LZMA) as zip:
+        #     for file in ['TECR_consolidated.json', 'amalgamated_TECR_scrape.csv', 'TECRDB_scrape.csv']:
+        #         zip.write(file)
+        #         os.remove(file)
         return self.master_file
-        
-    def add_rows(self, new_enzyme_col, new_reference_col, master_enzyme_column_name = 'Enzyme:', 
-                master_reference_col = 'Reference ID:', export = False):
-        # compare the enzymes
-        new_enzymes = set(self.new_file[new_enzyme_col])  
-        master_enzymes = set([enzyme.strip() for enzyme in self.master_file[master_enzyme_column_name] if enzyme != ' '])
-        missing_master_enzymes = self.set_contrast('enzymes', master_enzymes, new_enzymes, 'new file')
-        
-        # compare the references
-        new_references = set(self.new_file[new_reference_col])
-        master_references = set([re.sub('_.+', '', reference) for reference in self.master_file[master_reference_col] if reference != ' '])
-        missing_master_references = self.set_contrast('references', master_references, new_references, 'new file')
-        
-        original_master_length = self.master_file
-        
-        # add new data rows
-        self.new_additions = set()
-        for new_index, new_row in self.new_file.iterrows():
-            if new_row[new_reference_col] in missing_master_references or new_row[new_enzyme_col] in missing_master_enzymes:
-                self.master_file.loc[len(self.master_file.index)] = self._define_row(new_index, new_row, self.scraping)
-                self.new_additions.add(new_index)
-       
-        # format the magnesium potential
-        undescribed = list(self.master_file['Experimental conditions'])[self.original_master_file_length+1:]
-        for index, row in enumerate(undescribed):
-            if isnumber(row):
-                self.master_file.at[index+self.original_master_file_length+1, 'Experimental conditions'] = '{} = -log[Mg+2]'.format(str(row))
-
-        if export: #!!! relegate to a dedicated export function
-            self.master_file.to_csv(f'{date.today()}_master_TECR_1.csv')
             
-        if original_master_length == len(self.master_file):
-            warn(f'CodeError: The master file has not changed length.')
-        print('total additions', len(list(self.new_additions)))
-            
-    def merge_existing(self, export = False):
+    def _merge_existing(self):
+        def equal(val1, val2):
+            if isinstance(val1, str) and isinstance(val2, str):
+                if isnumber(val1) and isnumber(val2):
+                    if self.__rounding(val1) != self.__rounding(val2):
+                        error = r''.join([str(x) for x in [master_index, '___','temperature', '___', new_temperature, '___', master_temperature]])
+                        warn(error), errors.append(error)
+                elif val1 != ' ' and val2 != ' ':
+                    return val1 == val2
+            else:
+                return self.__rounding(val1) == self.__rounding(val2)
+                
         matched_master_indices, errors_dictionary = {}, {}
-        display_count = unmatched_entries = 0
+        unmatched_entries = 0
         for new_index, new_row in self.new_file.iterrows():
             if new_index not in self.new_additions:
                 matched_datum = False
-
+                
                 # define the new values for this datum 
-                (freiburger_index, du_index, noor_index, new_enzyme, add_kegg_reaction, add_cid_reaction, new_reaction, reference_string, new_reference, 
-                 new_temperature, new_ph, new_k, km, add_method, buffer, add_pmg, add_ec, solutes_1, solutes_2, ionic_strength_1, add_ionic_strength,
-                 enthalpy) = self._define_row(new_index, new_row, self.scraping)
+                (NIST_index, du_index, noor_index, new_enzyme, add_kegg_reaction, add_cid_reaction, add_ec, new_reaction, reference_string, 
+                 new_reference, new_temperature, new_ph, new_k, km, environmental_conditions, ionic_strength_1, enthalpy, solutes_1, buffer, add_pmg, 
+                 add_method, add_ionic_strength, solutes_2 
+                 ) = self.__define_row(new_index, new_row, self.scraping)
 
                 # determine the set of possible matches
                 errors = []
-                matching_master_subset = self.master_file.loc[(self.master_file['Enzyme:'] == new_enzyme)]    #  & (master_file['Keq'] == new_k) & (master_file['T [K]'] == new_temperature) & (master_file['pH '] == new_ph)   #!!! other criteria besides the name should be considered for matching.
+                matching_master_subset = self.master_file.loc[self.master_file['Enzyme:'] == new_enzyme]    #  & (master_file['Keq'] == new_k) & (master_file['T [K]'] == new_temperature) & (master_file['pH '] == new_ph)   #!!! other criteria besides the name should be considered for matching.
                 for master_index, master_row in matching_master_subset.iterrows():  
                     # remove previously matched rows
                     if master_index in matched_master_indices:
-                        error = f'previously matched master_index {master_index} to the new_index {matched_master_indices[master_index]}.'
-                        warn(error), errors.append(error)
+                        error = f'CodeErorr: Previously matched master_index {master_index} to the new_index {matched_master_indices[master_index]}.'
+                        if self.verbose:
+                            warn(error)
+                        errors.append(error)
                         continue
 
                     # define the master values for this datum 
-                    master_reference_id, master_reaction, master_temperature, master_ph, master_k = self._define_row(master_index, master_row, scraping_name = 'master')
-                    if new_reference != master_reference_id:
-                        error = f'previously matched master_index {master_index} reference {master_reference_id} with {new_reference}.'
-                        warn(error), errors.append(error)
+                    master_reference_id, master_reaction, master_temperature, master_ph, master_k = self.__define_row(master_index, master_row, 'master')
+                    if not equal(new_reference, master_reference_id):
+                        error = f'CodeErorr: Previously matched master_index {master_index} reference {master_reference_id} with {new_reference}.'
+                        if self.verbose:
+                            warn(error)
+                        errors.append(error)
                         continue
 
-                    # match the temperature
-                    if (new_temperature and master_temperature) not in empty: #!!! Adapt the function from AMALGAMATE in the scraping script
-                        new_temperature = re.sub('l', '1', str(new_temperature))
-                        master_temperature = re.sub('l', '1', str(master_temperature))
-                        if self.rounding(new_temperature) != self.rounding(master_temperature):
-                            error = r''.join([str(x) for x in [master_index, '___','temperature', '___', new_temperature, '___', master_temperature]])
-    #                         print(error)
-                            errors.append(error)
-                            continue
-
-                    # match the pH
-                    if (new_ph and master_ph) not in empty:
-                        new_ph = str(new_ph).strip('?~')
-                        master_ph = str(master_ph).strip('?~')
-                        if isnumber(new_ph) and isnumber(master_ph):
-                            if self.rounding(new_ph) != self.rounding(master_ph):
-                                error = r''.join([str(x) for x in [master_index, '___','ph', '___', new_ph, '___', master_ph]])
-    #                             print(error)
-                                errors.append(error)
-                                continue
-
-                    # match the Keq
+                    # compare values
                     if re.search('\w(\?\w+)', str(master_k)):
                         master_k = re.sub('(\?\w+)', '', str(master_k))
-
-                    if (new_k and master_k) not in empty:
-                        new_k = str(new_k).strip('~?')
-                        master_k = str(master_k).strip('~?')
-                        if isnumber(new_k) and isnumber(master_k):
-                            if self.rounding(new_k) != self.rounding(master_k):
-                                error = r''.join([str(x) for x in [master_index, '___', 'Keq', '___', new_k, '___', master_k]])
-    #                             print(error)
-                                errors.append(error)
-                                continue
-
-                    # match the reactions 
-                    if new_reaction != master_reaction:
-                        if re.search('= -\w', master_reaction):
-                            remove_string = re.search('=(\s-)\w', master_reaction).group(1)
-                            master_reaction = re.sub(remove_string, '-', master_reaction)
-
-                        if new_reaction != master_reaction:
-                            if re.search(' -D-', master_reaction):
-                                remove_string = re.search('\s(-D-)', master_reaction).group(1)
-                                master_reaction = re.sub(remove_string, 'D-', master_reaction, 1)
-
+                    for new, master in zip([str(new_k).strip('~?'), new_temperature.replace('l', '1'), str(new_ph).strip('?~')], 
+                                           [str(master_k).strip('~?'), master_temperature.replace('l', '1'), str(master_ph).strip('?~')]):
+                        if not equal(new, master):
+                            error = f'CodeErorr: The new value {new} | {new_index} does not match the existing value {master} | {master_index}.'
+                            warn(error)
+                            errors.append(error)
+                            continue
+                        
+                    # match the reactions after multiple iterations 
+                    tries = 0
+                    match = True
+                    while new_reaction != master_reaction:
+                        if tries == 0:
+                            if re.search('= -\w', master_reaction):
+                                remove_string = re.search('=(\s-)\w', master_reaction).group(1)
+                                master_reaction = re.sub(remove_string, '-', master_reaction)
+                        elif tries == 1:
                             if new_reaction != master_reaction:
-                                if re.search('\w\d\-', master_reaction):
-                                    loop = True
-                                    try:
-                                        while loop :
-                                            master_reaction, remove_string = charge_format(master_reaction)
-                                            if remove_string is None:
-                                                loop = False
-                                    except:
-                                        pass
-
-                                if new_reaction != master_reaction:
-                                    if re.search('\(\w\)\-', master_reaction):
-                                        master_reaction = re.sub('\(\w\)\-', '', master_reaction)
-
-                                    if new_reaction != master_reaction:
-                                        if re.search('-lipoate', master_reaction):
-                                            master_reaction = re.sub('(-lipoate)', 'lipoate', master_reaction, 1)
-
-                                        if new_reaction != master_reaction:
-                                            error = ''.join([str(x) for x in [master_index, '___', 'reaction', '___', new_reaction, '___', master_reaction]])
-    #                                         print(error)
-                                            errors.append(error)
-                                            continue
-
+                                if re.search(' -D-', master_reaction):
+                                    remove_string = re.search('\s(-D-)', master_reaction).group(1)
+                                    master_reaction = re.sub(remove_string, 'D-', master_reaction, 1)
+                        elif tries == 2:
+                            if re.search('\w\d\-', master_reaction):
+                                loop = True
+                                while loop:
+                                    master_reaction, remove_string = charge_format(master_reaction)
+                                    if remove_string is None:
+                                        loop = False
+                        elif tries == 3:
+                            if re.search('\(\w\)\-', master_reaction):
+                                master_reaction = re.sub('\(\w\)\-', '', master_reaction)
+                        elif tries == 4:
+                            if re.search('-lipoate', master_reaction):
+                                master_reaction = re.sub('(-lipoate)', 'lipoate', master_reaction, 1)
+                        else:
+                            error = f'CodeError: The master reaction {master_reaction} | {master_index} does not match the new reaction {new_reaction}'
+                            warn(error), errors.append(error)
+                            match = False
+                        tries += 1
 
                     # define the new data of the master file
-
-                    matched_datum = True
-                    matched_master_indices[master_index] = new_index
-                    self.redefine_master(master_row, new_row, master_index, new_index)
-                    break
+                    if match:
+                        matched_datum = True
+                        matched_master_indices[master_index] = new_index
+                        self.__redefine_master(master_row, new_row, master_index, new_index)
+                        break
 
                 if not matched_datum:
-                    print('--> Failed index to match: ', new_index, '___', new_enzyme)
+                        if self.verbose:
+                            warn(f'CodeError: Failed index to match {new_enzyme} | {new_index}')
                     unmatched_entries += 1
                     errors_dictionary[new_index] = errors
 
         # test for standard_id uniqueness and unmatched values
-        unique_matched_indices = set()
-        for master_index in matched_master_indices:
-            if master_index in unique_matched_indices:
-                print('repeated entry: ', master_index)
-            else:
-                unique_matched_indices.add(master_index)
+        duplicate_entries = '\t'.join([master_index for master_index in matched_master_indices if matched_master_indices.count(master_index) > 1])
+        print('repeated entries:\n', duplicate_entries) 
         print('Unmatched indices: ', unmatched_entries)
 
         # export the unmatched datums
-        with open(f'{date.today()}_unmatched_TECR_datums.json', 'w') as output:
+        with open('TECRDB/unmatched_TECRDB_datums.json', 'w') as output:
             json.dump(errors_dictionary, output, indent = 3)
 
-        # export the combined master file
-        if export:
-            self.master_file.to_csv(f'{date.today()}_master_TECR_2.csv')
-        
-       
-    def incorporate_manual_curation(self, manual_curation_csv, export = False):
-        # import the manual curation file
+    def _incorporate_manual_curation(self, manual_curation_path):
+        # import and clean the manual curation file
+        print(self.scraping)
+        with open(manual_curation_path, 'r') as curation:
+            manual_curation_csv = read_csv(curation, header = 0)
         headings = []
         for column in manual_curation_csv:
-            headings.append(column.strip('\t'))
-            for index, row in manual_curation_csv[column].iteritems():
-                manual_curation_csv[column].iloc[index] = str(row).strip('\t')
+            headings.append(column.strip())
+            for index, val in manual_curation_csv[column].iteritems():
+                manual_curation_csv[column].iloc[index] = str(val).strip()
         manual_curation_csv.columns = headings
 
         # parse the manually curated content
@@ -222,207 +200,196 @@ class merge_package():
         self.duplicates = set()
         for index, row in manual_curation_csv.iterrows():
             # characterize the curated datums            
-            master_file_ids = [row['Master file index']]
-            master_file_ids[0] = master_file_ids[0].strip()
             error = row['Error resolution']
-            add = False
-            merge = False
-            if master_file_ids[0] == 'New' or re.search('sigfig', error):
-                add = True
-
-            elif not re.search('--', master_file_ids[0]):            
-                merge = True
-                # parse the corresponding master_file indices
-                if re.search('-', master_file_ids[0]):
-                    master_file_ids = master_file_ids[0].split('-')
-                    lower = int(master_file_ids[0])
-                    upper = int(master_file_ids[1])
-
-                    if lower < upper:
-                        id_range = upper - lower
-                        master_file_ids = [id + lower for id in range(id_range + 1)]                
-
-                elif re.search(r'\\', master_file_ids[0]):
-                    master_file_ids = master_file_ids[0].split('\\')   
-                else:
-                    master_file_ids = [int(master_file_ids[0])]
-
-            # parse the previously unmatched standard IDs
+            add = merge = False
             new_ids = [row['New index']]
-            if re.search('-', new_ids[0]):
-                new_ids = new_ids[0].split('-')
-                lower = int(new_ids[0])
-                upper = int(new_ids[1])
-                if lower < upper:
-                    id_range = upper - lower
-                    new_ids = [id + lower for id in range(id_range + 1)]
-            else:
-                new_ids = [int(new_ids[0])]
-
-            # add new datums to the master file
-            if add or merge:
-                for new_id_index in range(len(new_ids)):
-                    new_id = new_ids[new_id_index]
-                    new_row = self.new_file.iloc[int(new_id)]
+            if row['Master file index'] == 'New' or re.search('sigfig', error):
+                add = True
+            elif row['Master file index'] != '--':   
+                if all(isnumber(x) for x in row['Master file index'].split('-')):
+                    master_file_ids = list(map(int, row['Master file index'].split('-')))
+                else:
+                    print(row['Master file index'].split('-'))
+                merge = True
+                if len(master_file_ids) > 1:
+                    master_file_ids = [id_num + master_file_ids[0] for id_num in range(diff(master_file_ids)[0] + 1)]    
                     
-                    if new_id not in list(self.master_file[f'{self.scraping}_index']):
+            if all(isnumber(x) for x in new_ids[0].split('-')):
+                new_ids = list(map(int, new_ids[0].split('-')))
+            else:
+                print(new_ids[0].split('-'))
+            if len(new_ids) > 1:
+                new_ids = [id + new_ids[0] for id in range(diff(new_ids)[0] + 1)]            
+            
+            # add new datums to the master file
+            parsing_errors = None
+            if add or merge:
+                for new_id_index, new_id in enumerate(new_ids):
+                    new_row = self.new_file.iloc[new_id]
+                    if new_id not in self.master_file[self.scraping+'_index'].to_list():
                         if add:
-                            self.master_file.loc[len(self.master_file.index)] = self._define_row(new_id, new_row, self.scraping)  
+                            self.master_file.loc[len(self.master_file)] = self.__define_row(new_id, new_row, self.scraping)
                         elif merge:
-                            # match the standard id with the master_index
-                            match_index = new_ids.index(new_id)
-                            print(new_id)
-                            print(new_ids)
-                            print(match_index)
-                            print(master_file_ids)
-                            master_index = master_file_ids[match_index]
-                            master_row = self.master_file.iloc[int(master_index)]
-
-                            # merge the content of the equilibrator_2008 and master_file for the corresponding standard id
-                            self.redefine_master(master_row, new_row, master_index, new_id)
+                            self.__redefine_master(self.master_file.iloc[new_id_index], new_row, master_file_ids[new_id_index], new_id)
                     else:
-                        print(f'--> ERROR: Repeated {self.scraping} index < {new_id} >')
-
+                        if self.verbose:
+                            warn(f'CurationError: Repeated {self.scraping} index {new_id}.')
             else:
                 # characterize the curated datums            
-                error = row['Error resolution']
-                if re.search('Duplicate', error):
-                    for new_id in new_ids:
-                        self.duplicates.add(new_id)
-                    print('The {} new_id is a duplicate.'.format(new_ids))
-                elif re.search('already', error):
-                    print('The {} new_id is already matched.'.format(new_ids))
+                if re.search('Duplicate', row['Error resolution']):
+                    self.duplicates.update(new_ids)
+                    print(f'The {new_ids} new_id is a duplicate.')
+                elif re.search('already', row['Error resolution']):
+                    print(f'The {new_ids} new_id is already matched.')
                 else:
                     parsing_errors.append(master_file_ids)
-                    print('ERROR: The {} new_id was not captured by the parsing.'.format(new_ids))
+                    print(f'CodeError: The {new_ids} new_id was not captured during parsing.')
 
-        if parsing_errors == []:
-            parsing_errors = None
         print('Parsing errors: ', parsing_errors)
-
-        # export the expanded master_file
-        if export:
-            self.master_file.to_csv(f'{date.today()}_master_TECR_3.csv')
-            
-    def confirm_merging(self):
-        new_indices = set(self.new_file.index)
-        merged_indices = set(list(self.master_file[f'{self.scraping}_index']))
-        missing_indices = new_indices - merged_indices
-        missing_unique_indices = missing_indices - self.duplicates
-        if missing_unique_indices == set():
-            missing_unique_indices = None
-        else:
-            missing_unique_indices = sorted(missing_unique_indices)
-        
-        print('missing unique indices', missing_unique_indices)
-        return missing_unique_indices
     
-    def _define_row(self, new_index, new_row, scraping_name):
-        # define the Noor scraping
+    def _confirm_merging(self):
+        print(self.master_file[self.scraping+'_index'].to_list())
+        missing_indices = set(self.new_file.index) - set(self.master_file[self.scraping+'_index'].to_list())
+        missing_unique_indices = missing_indices - self.duplicates
+        if missing_unique_indices != set():
+            missing_unique_indices = sorted(missing_unique_indices)
+            print('missing unique indices', missing_unique_indices)
+        else:
+            print('all indices are captured')
+            return missing_unique_indices
+        
+    def _add_rows(self, new_enzyme_col, new_reference_col, master_enzyme_column_name = 'Enzyme:', master_reference_col = 'Reference ID:'):
+        # compare the enzymes
+        new_enzymes = set(self.new_file[new_enzyme_col])  
+        master_enzymes = set([enzyme.strip() for enzyme in self.master_file[master_enzyme_column_name] if enzyme != ' '])
+        missing_master_enzymes = self.__set_contrast('enzymes', master_enzymes, new_enzymes, 'new file')
+        
+        # compare the references
+        new_references = set(self.new_file[new_reference_col])
+        master_references = set([re.sub('_.+', '', reference) for reference in self.master_file[master_reference_col] if reference != ' '])
+        missing_master_references = self.__set_contrast('references', master_references, new_references, 'new file')
+        original_master_length = len(self.master_file)
+        
+        # add new data rows
+        self.new_additions = set()
+        for new_index, new_row in self.new_file.iterrows():
+            if new_row[new_reference_col] in missing_master_references or new_row[new_enzyme_col] in missing_master_enzymes:
+                ls = self.__define_row(new_index, new_row, self.scraping)
+                # print(len(ls), ls, len(self.master_file.columns), self.master_file.columns)
+                self.master_file.loc[len(self.master_file)] = ls
+                self.new_additions.add(new_index)
+       
+        # format the magnesium potential
+        undescribed = list(self.master_file['Experimental conditions'])[original_master_length+1:]
+        for index, row in enumerate(undescribed):
+            if isnumber(row):
+                self.master_file.at[index+original_master_length+1, 'Experimental conditions'] = f'{row} = -log[Mg+2]'
+
+        if original_master_length == len(self.master_file):
+            warn('CodeError: The master file has not changed length.')
+        print('total additions', len(list(self.new_additions)))
+
+    def __rounding(self, number):
+        if self.scraping == 'noor':
+            return float(number)
+        elif self.scraping == 'du':
+            return sigfig.round(number, 2)
+        
+    def __define_row(self, new_index, new_row, scraping_name):
         if scraping_name == 'noor':
-            du_index = None
-            add_id = f'https://w3id.org/related-to/doi.org/10.5281/zenodo.3978439/files/TECRDB.csv#entry{new_index}'
-            add_enzyme = new_row['enzyme_name']
-            add_kegg_reaction = new_row['reaction']
-            add_cid_reaction = None
-            add_reaction = new_row['description']
-            reference_string = None
-            add_reference = new_row['reference']
-            add_temperature = new_row['temperature']
-            add_ph = new_row['p_h']
             add_k = new_row['K_prime']
             if add_k is nan:
                 add_k = new_row['K']
-            km = None
-            add_method = new_row['method']
-            buffer = None
-            add_pmg = new_row['p_mg']
-            add_ec = new_row['EC']
-            solutes_1 = solutes_2 = ionic_strength_1 = None
-            add_ionic_strength = new_row['ionic_strength']
-            enthalpy = None
-            
-            return [freiburger_index, du_index, add_id, add_enzyme, add_kegg_reaction, add_cid_reaction, add_reaction, reference_string, add_reference, add_temperature, add_ph, add_k, km, add_method, buffer, add_pmg, add_ec, solutes_1, solutes_2, ionic_strength_1, add_ionic_strength, enthalpy]
-        
+            return [
+                None,                      # NIST_index 
+                None,                      # du_index 
+                new_index,                 # f'https://w3id.org/related-to/doi.org/10.5281/zenodo.3978439/files/TECRDB.csv#entry{new_index}', 
+                new_row['enzyme_name'],    # add_enzyme
+                new_row['reaction'],       # add_kegg_reaction
+                None,                      # add_cid_reaction
+                new_row['EC'],             # add_ec 
+                new_row['description'],    # add_reaction
+                None,                      # reference_string
+                new_row['reference'],      # add_reference
+                new_row['temperature'],    # add_temperature
+                new_row['p_h'],            # add_ph
+                add_k,
+                None,                      # km
+                None,                      # environmental_conditions
+                new_row['ionic_strength'], # add_ionic_strength
+                None,                      # enthalpy
+                None,                      # solutes_1
+                None,                      # buffer
+                new_row['p_mg'],           # add_pmg
+                new_row['method'],         # add_method
+                None,                      # ionic_strength_1
+                None,                      # solutes_2
+                ]
         elif scraping_name == 'du':
-            add_id = f'https://w3id.org/related-to/doi.org/10.5281/zenodo.5494490/files/TableS1_Keq.csv#Keq_{new_index}'
-            noor_index = None
-            add_enzyme = new_row['Reaction']
-            add_kegg_reaction = None
-            add_cid_reaction = new_row['Reaction formula in CID format']
-            add_reaction = new_row['reaction_string']
-            reference_string = None
-            add_reference = new_row['Reference_id']
-            add_temperature = new_row['T(K)']            
-            add_ph = new_row['pH']
-            add_k = new_row['K\'']
-            km = None
-            add_method = new_row['Method']            
-            add_buffer = new_row['Buffer/reagents/solute added']
-            add_conditions = ' _ '.join([str(new_row['media conditions']), str(new_row['electrolytes']), str(new_row['pMg'])])
-            add_conditions = re.sub('_\s+_', '', add_conditions)
-            add_ec = new_row['EC value']
-            solutes_1 = solutes_2 = ionic_strength_1 = None
-            add_ionic_strength = new_row['Ionic strength']
-            enthalpy = None
-            
-            return [freiburger_index, add_id, noor_index, add_enzyme, add_kegg_reaction, add_cid_reaction, add_reaction, reference_string, add_reference, add_temperature, add_ph, add_k, km, add_method, add_buffer, add_conditions, add_ec, solutes_1, solutes_2, ionic_strength_1, add_ionic_strength, enthalpy]
-            
+            add_conditions = ' ; '.join([str(x) for x in [new_row['media conditions'], new_row['electrolytes'], new_row['pMg']] if x is not None])
+            add_conditions = re.sub(';\s+;', '', add_conditions)
+            return [
+                None,                         # NIST_index 
+                new_index,                    # f'https://w3id.org/related-to/doi.org/10.5281/zenodo.5494490/files/TableS1_Keq.csv#Keq_{new_index}', 
+                None,                         # noor_index 
+                new_row['Enzyme'],            # add_enzyme
+                None,                         # add_kegg_reaction
+                new_row['Reaction formula in CID format'],  # add_cid_reaction
+                new_row['EC value'],          # add_ec
+                new_row['Reaction'],          # add_reaction
+                None,                         # reference_string
+                new_row['Reference_id'],      # add_reference
+                new_row['T(K)'],              # add_temperature
+                new_row['pH'],                # add_ph
+                new_row['K\''],               # add_k
+                None,                         # km
+                add_conditions,               # environmental_conditions
+                new_row['Ionic strength'],    # add_ionic_strength
+                None,                         # enthalpy
+                None,                         # solutes_1
+                new_row['Buffer/reagents/solute added'],    # add_buffer
+                None,                         # add_pmg
+                new_row['Method'],            # add_method
+                None,                         # ionic_strength_1
+                None,                         # solutes_2
+                ]
         elif scraping_name == 'master':
-            master_reference = new_row['Reference:']
-            master_method = new_row['Method:']
-            master_ec = new_row['EC Value:']
-            master_pmg = new_row['Experimental conditions']
-            master_ionic_strength = new_row['Ionic strength [mol / dm^3]']
-            master_temperature = new_row['T [K]']
-            master_ph = new_row['pH ']
-            master_k = new_row['Keq']
-            master_km = new_row['Km']
             master_reaction = new_row['Reaction:']
-            master_reference_id = re.sub('_.+', '', new_row['Reference ID:'])
-
             if self.scraping == 'noor':    
                 master_reaction = re.sub('\u00ce\u00b1|\u00ce\u00b2', '', master_reaction)
                 master_reaction = re.sub('\u00cf\u2030', '-w', master_reaction)
-            
-            return master_reference_id, master_reaction, master_temperature, master_ph, master_k
-        
-        
-            
+            return (re.sub('_.+', '', new_row['Reference ID:']), # master_reference_id
+                    master_reaction, 
+                    new_row['T [K]'],                            # master_temperature 
+                    new_row['pH'],                               # master_ph
+                    new_row['Keq']                               # master_k
+                    )
+    
     # merging values between matched datum
-    def redefine_master(self, master_row, new_row, master_index, new_index, verbose = False):
-
+    def __redefine_master(self, master_row, new_row, master_index, new_index, verbose = False):
         # print the datum pair for manual inspection
         if verbose:
-            announcement = '\nmatched pair:'
-            print(announcement, '\n', '='*len(announcement))
+            print('\nmatched pair:', '\n', '='*len('matched pair:'))
             print('new_index', new_index)
             print('master_index', master_index, '\n')
 
         # match KEGG reactions
         master_kegg = master_row['KEGG Reaction:']
-        if master_kegg in empty and self.scraping == 'noor':
-            new_kegg = new_row['reaction']
-            self.master_file.at[master_index, 'KEGG Reaction:'] = new_kegg
+        if master_kegg == ' ' and self.scraping == 'noor':
+            self.master_file.at[master_index, 'KEGG Reaction:'] = new_row['reaction']
 
         # match magnesium concentrations
         if self.scraping == 'noor':
             new_pmg = new_row['p_mg']
         elif self.scraping == 'du':
             new_pmg = new_row['pMg']
-        master_pmg = master_row['Experimental conditions']
-        if str(master_pmg) == '{} = -log[Mg+2]'.format(str(new_pmg)):
-            pass            
-        elif new_pmg not in empty:
-            if master_pmg is nan or master_pmg in empty:
-                self.master_file.at[master_index, 'Experimental conditions'] = '{} = -log[Mg+2]'.format(str(new_pmg))
-                if verbose:
-                    print(master_index, '\t', 'new pmg', '\t', self.master_file.at[master_index, 'Experimental conditions'])
+        if master_row['Experimental conditions'] != f'{new_pmg} = -log[Mg+2]' and new_pmg != ' ':
+            if master_row['Experimental conditions'] is nan or master_row['Experimental conditions'] == ' ':
+                self.master_file.at[master_index, 'Experimental conditions'] = f'{new_pmg} = -log[Mg+2]'
             else:
-                self.master_file.at[master_index, 'Experimental conditions'] = " or ".join([str(master_pmg), '{} (-log[Mg+2])'.format(str(new_pmg))]) 
-                if verbose:
-                    print(master_index, '\t', 'new pmg', '\t', self.master_file.at[master_index, 'Experimental conditions'])            
-                
+                self.master_file.at[master_index, 'Experimental conditions'] = master_row['Experimental conditions']+f" or {new_pmg} (-log[Mg+2])"
+            if verbose:
+                print(master_index, '\t', 'new pmg', '\t', self.master_file.at[master_index, 'Experimental conditions'])            
                 
 #         add_conditions = ' _ '.join([str(du_row['media conditions']), str(du_row['electrolytes']), ''])
 #         add_conditions = re.sub('_\s+_', '', add_conditions)
@@ -433,31 +400,20 @@ class merge_package():
 #             master_file.at[master_index, 'Experimental conditions'] = ' _ '.join([str(master_pmg), str(add_conditions)]) 
 #             print(master_index, '\t', 'new pmg', '\t', master_file.at[master_index, 'Experimental conditions'])  
                 
-
         # match methods
-        master_method = master_row['Method:']
         if self.scraping == 'noor':
             new_method = new_row['method']
         elif self.scraping == 'du':
             new_method = new_row['Method']
-            
-        if master_method == new_method:
-            pass            
-        elif master_method is nan or master_method  in empty:
+        if master_row['Method:'] is nan or master_row['Method:'] == ' ':
             self.master_file.at[master_index, 'Method:'] = new_method
-        elif new_method is not nan and new_method not in empty:
+        elif new_method is not nan and new_method != ' ':
             new_methods = new_method.split(' and ')
-            master_methods = new_method.split(' and ')
-            combined_methods = set(new_methods + master_methods)
-
-            if combined_methods is not None:
-                combined_methods_string = ' and '.join([method for method in combined_methods])
-            else:
-                combined_methods_string = ' and '.join([new_method, master_method])
-
-            self.master_file.at[master_index, 'Method:'] = combined_methods_string
+            master_methods = master_row['Method:'].split(' and ')
+            if set(new_methods + master_methods) != set():
+                self.master_file.at[master_index, 'Method:'] = ' and '.join([method for method in set(new_methods + master_methods)])
             if verbose:
-                print(master_index, '\t', 'new method', '\t', self.master_file.at[master_index, 'Method:'])
+                print(f'The master index {master_index} possesses a new method: {self.master_file.at[master_index, "Method:"]}')
 
         # match EC values
         master_ec = master_row['EC Value:']
@@ -465,50 +421,43 @@ class merge_package():
             new_ec = new_row['EC']
         elif self.scraping == 'du':
             new_ec = new_row['EC value']
-            
-        if master_ec is not nan and master_ec not in empty:
-            master_ec = [master_ec]
-            if master_ec[0] == new_ec:
-                self.master_file.at[master_index, 'EC Value:'] = master_ec[0]   
-            elif new_ec is not nan and new_ec not in empty:
+        if master_ec is not nan and master_ec != ' ':
+            if master_ec == new_ec:
+                self.master_file.at[master_index, 'EC Value:'] = master_ec   
+            elif new_ec is not nan and new_ec != ' ':
                 if re.search('&', new_ec):
                     new_ecs = new_ec.split('&')
-                    #new_ecs = [str(ec) for ec in new_ecs]
-                    total_ecs = unique(new_ecs + master_ec)
+                    total_ecs = set(new_ecs + list(master_ec))
                 else:
-                    total_ecs = [master_ec[0], new_ec]
+                    total_ecs = [master_ec, new_ec]
                 self.master_file.at[master_index, 'EC Value:'] = " & ".join(total_ecs)
                 if verbose:
-                    print(master_index, '\t', 'new EC', '\t', self.master_file.at[master_index, 'EC Value:'])
+                    print(f'The master index {master_index} possesses a new EC: {self.master_file.at[master_index, "EC Value:"]}')
         else:
-            master_file.at[master_index, 'EC Value:'] = new_ec
+            self.master_file.at[master_index, 'EC Value:'] = new_ec
 
         # match ionic strength concentrations
-        master_ionic_strength = master_row['Ionic strength [mol / dm^3]']
+        master_ionic_strength = master_row['Ionic strength [mol/dm^3]']
         if self.scraping == 'noor':
             new_ionic_strength = new_row['ionic_strength']
         elif self.scraping == 'du':
             new_ionic_strength = new_row['Ionic strength']
-        
-        if str(master_ionic_strength) == str(new_ionic_strength):
-            pass            
-        elif master_ionic_strength is nan or master_ionic_strength  in empty:
-            self.master_file.at[master_index, 'Ionic strength [mol / dm^3]'] = new_ionic_strength
-        elif new_ionic_strength is not nan and new_ionic_strength not in empty:
-            self.master_file.at[master_index, 'Ionic strength [mol / dm^3]'] = " & ".join([str(master_ionic_strength), str(new_ionic_strength)])
+        if master_ionic_strength is nan or master_ionic_strength == ' ':
+            self.master_file.at[master_index, 'Ionic strength [mol/dm^3]'] = new_ionic_strength
+        elif new_ionic_strength is not nan and new_ionic_strength != ' ':
+            self.master_file.at[master_index, 'Ionic strength [mol/dm^3]'] = " & ".join([str(master_ionic_strength), str(new_ionic_strength)])
             if verbose:
-                print(master_index, '\t', 'new ionic strength', '\t', self.master_file.at[master_index, 'Ionic strength [mol / dm^3]'])            
+                print(master_index, '\t', 'new ionic strength', '\t', self.master_file.at[master_index, 'Ionic strength [mol/dm^3]'])            
 
         # match the standard_id
-        if master_row[f'{self.scraping}_index'] not in empty:
-            print('proposed new index', new_index)
-            print('--> ERROR: The master_index < {} > is predefined as < {} >.'.format(master_index, master_row[f'{self.scraping}_index']))
-            self.master_file.loc[len(self.master_file.index)] = self._define_row(new_index, new_row, self.scraping)
+        if master_row[self.scraping+'_index'] != ' ':
+            print('The master_index {master_index} is predefined as {master_row[self.scraping+"_index"]}.')
+            self.master_file.loc[len(self.master_file)] = self.__define_row(new_index, new_row, self.scraping)
         else:
-            self.master_file.at[master_index, f'{self.scraping}_index'] = new_index
+            self.master_file.at[master_index, self.scraping+'_index'] = new_index
     
     # define the printing function
-    def set_contrast(self, data_description, master_set, set_2, set_2_description, verbose = False, total_values = True):
+    def __set_contrast(self, data_description, master_set, set_2, set_2_description, verbose = False, total_values = True):
         # print the original sets
         print('='*30)
         if total_values:
@@ -516,21 +465,9 @@ class merge_package():
             print('{} in the {}: '.format(data_description, set_2_description), len(set_2))
 
         # contrast the sets
-        extra = master_set - set_2
-        missing = set_2 - master_set
+        print(f'\nExtra {data_description} in the master file, versus {set_2_description}: ', len(master_set - set_2))
+        print(f'\nMissing {data_description} in the master file, versus {set_2_description}: ', len(set_2 - master_set))
         if verbose:
-            print('\nExtra {} in the master file, versus {}: '.format(data_description, set_2_description), len(extra_set_2), '\n', extra)
-            print('\nMissing {} in the master file, versus {}: '.format(data_description, set_2_description), len(missing_set_2), '\n', missing)
-        else:
-            print('Extra {} in the master file, versus {}: '.format(data_description, set_2_description), len(extra))
-            
-
-            print('Missing {} in the master file, versus {}: '.format(data_description, set_2_description), len(missing))
-
-        return missing
-
-    def rounding(self, number):
-        if self.scraping == 'noor':
-            return float(number)
-        elif self.scraping == 'du':
-            return sigfig.round(number, 2)
+            print('\n', master_set - set_2)
+            print('\n', set_2 - master_set)
+        return set_2 - master_set

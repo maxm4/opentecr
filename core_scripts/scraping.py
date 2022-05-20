@@ -7,9 +7,10 @@ Created on Mon May 16 09:24:58 2022
 from requests.packages.urllib3.util.retry import Retry
 from requests.adapters import HTTPAdapter
 from pandas import DataFrame, read_csv, concat
-from zipfile import ZipFile, ZIP_LZMA
+from zipfile import ZipFile #, ZIP_LZMA
 from bs4 import BeautifulSoup
 from warnings import warn
+from shutil import move
 from time import sleep
 import requests
 import numpy
@@ -86,7 +87,7 @@ class TECRDB():
                 warn(f'The {id_value} reference {total_url} possesses an unexpected data structure.')
                 continue
             if self.printing:
-                print(id_value, f'\t\tloop: {loop_count}', f'\t\t{id_row}/{total_entries} enzymes', 
+                print(id_value, f'\t\t{id_row}/{total_entries} enzymes', 
                       f'\t\t{index_count} datums', '\t\t\t\t', end = '\r')
             body1 = tables1[0].find_all("tr")
             heads, body_rows1 = body1[0], body1[1:]
@@ -140,17 +141,19 @@ class TECRDB():
         # refine the dataframe 
         combined_df = combined_df.fillna(' ') # prevents spill-over of text
         middle_dataframe_columns = ['T(K)', 'pH ', 'K<sub>c</sub>\' ', 'δ<sub>r</sub>H\'<sup>o</sup>(kJ.mol<sup>-1</sup>)', 'Km\'']
-        left_dataframe_columns = ['index', 'Enzyme:', 'Reaction:', 'Reference:', 'Reference ID:'] 
+        left_dataframe_columns = ['index', 'Enzyme:', 'EC Value:', 'Reaction:', 'Reference:', 'Reference ID:'] 
         right_dataframe_columns = list(set(combined_df.columns) - set(left_dataframe_columns) - set(middle_dataframe_columns))
         self.scraped_df = combined_df.reindex(
             columns = left_dataframe_columns + middle_dataframe_columns + right_dataframe_columns
             )
         
         # export the dataframe
-        self.scraped_df.to_csv('TECRDB_scrape.csv')
-        with ZipFile('TECRDB.zip', 'w', compression = ZIP_LZMA) as zip:
-            zip.write('TECRDB_scrape.csv')
-            os.remove('TECRDB_scrape.csv')
+        if not os.path.exists('TECRDB'):
+            os.mkdir('TECRDB')
+        self.scraped_df.to_csv('TECRDB/TECRDB_scrape.csv')
+        # with ZipFile('TECRDB.zip', 'w', compression = ZIP_LZMA) as zip:
+        #     zip.write('TECRDB_scrape.csv')
+        #     os.remove('TECRDB_scrape.csv')
 
     def amalgamate(self, zip_path = None):
         def merge_cells(re_search, col_name, printed):
@@ -171,13 +174,17 @@ class TECRDB():
             return printed
         
         # import the scraped data
+        if not os.path.exists('TECRDB'):
+            os.mkdir('TECRDB')
         if zip_path == None:
-            df = self.scraped_df
-        else:
+            df = read_csv(os.path.join('TECRDB/TECRDB_scrape.csv'))
+        elif zip_path:  
             with ZipFile(zip_path, 'r') as zip:
                 df = read_csv(zip.extract('TECRDB_scrape.csv'))
         df = df.fillna(' ') # prevents spill-over of text
         df = df.astype(str)
+        if os.path.exists('TECRDB_scrape.csv'):
+            move('TECRDB_scrape.csv', 'TECRDB/TECRDB_scrape.csv')
         
         combined_columns = set()
         re_searches = {
@@ -270,7 +277,7 @@ class TECRDB():
             }, inplace = True)
         
         self.amalgamated_df = df
-        self.amalgamated_df.to_csv("amalgamated_TECR_scrape.csv") 
+        self.amalgamated_df.to_csv("TECRDB/amalgamated_TECRDB_scrape.csv") 
             
         # count down for processing and organizing the data
         def assign_values(col, reference_list, values_list, temperatures_list, ph_list, added):
@@ -361,10 +368,10 @@ class TECRDB():
             count += 1
         
         #export the database dictionary as a JSON file
-        with open('TECR_consolidated.json', 'w') as output:
+        with open('TECRDB/TECRDB_consolidated.json', 'w') as output:
             json.dump(data_per_enzyme, output, indent = 4)
-        sleep(2)
-        with ZipFile('TECRDB.zip', 'w', compression = ZIP_LZMA) as zip:
-            for file in ['TECR_consolidated.json', 'amalgamated_TECR_scrape.csv', 'TECRDB_scrape.csv']:
-                zip.write(file)
-                os.remove(file)
+        # sleep(2)
+        # with ZipFile('TECRDB.zip', 'w', compression = ZIP_LZMA) as zip:
+        #     for file in ['TECR_consolidated.json', 'amalgamated_TECR_scrape.csv', 'TECRDB_scrape.csv']:
+        #         zip.write(file)
+        #         os.remove(file)

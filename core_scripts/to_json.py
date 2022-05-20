@@ -68,7 +68,7 @@ class JSON_datum():
                     value = re.search('(\d+.?\d+) = -log\[Mg\+2\]', str(row['Experimental conditions'])).group()
 
             self._export(row['Reference ID:'], '', 'tecr')
-        self._export('NIST_TECR_JSONs', '', 'tecr')
+        self._export('NIST_TECRDB_JSONs', '', 'tecr')
 
     def half_rxn_to_json(self, json_template_path, curator = 'APF'):
         with open(json_template_path, 'r') as template:
