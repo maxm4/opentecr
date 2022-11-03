@@ -31,6 +31,14 @@ a:hover, a:focus {
    color: gray;
 }
 
+/* forms */
+.submitbutton {
+  margin-bottom: 40px;
+}
+label.data {
+  padding-left: 30px;
+}
+
 /* header */
 header h1 {
   float: left;

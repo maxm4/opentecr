@@ -23,9 +23,136 @@
     </ul>
     <p>Please share literature suggestions or curated literature JSONs through the following forms.</p>
     <h2>Suggested Data</h2>
-    <p>Please populate the following form to suggest literature that we should curate.</p>
+    <p>Please suggest experimental data sources that we should curate.</p>
+    <form class="CurationSuggestion" action="results.html">
+      <fieldset class="suggestion">
+          <legend>Curation Suggestion</legend>
+          <label for="doiinput">
+              DOI or URL
+              <input type="text" name="doi" id="doiinput" value="https://doi.org/10.1093/nar/gkac331">
+          </label>
+          <label for="authorinput">
+              Authors
+              <input type="text" name="authors" id="authorinput" value="John Smith and Jane Doe">
+          </label>
+          <label for="yearinput">
+              Publication Year
+              <input type="text" name="year" id="yearinput" value="1984">
+          </label>
+          <label class="data" for="data">
+              Data
+              <input type="file" name="data" id="data" value="data">
+          </label>
+      </fieldset>
+      <fieldset class="additionalinfo">
+          <legend>Additional Information</legend>
+          <label for="why">
+              Why should it be curated?<br>
+              <textarea name="why" rows="8" cols="80"></textarea>
+          </label>
+          <br>
+          <label for="notes">
+              Notes<br>
+              <textarea name="notes" id="notes" rows="4" cols="80"></textarea>
+          </label>
+      </fieldset>
+      <fieldset class="submitbutton">
+          <input type="submit" id="submit" name="submit" value="Submit Request">
+      </fieldset>
+    </form>
     <h2>Curated Data</h2>
     <p>Please attached JSONs and curation notes of the data that has been curated, and provide a contact email for our curators to confirm approval of your data or communicate questions before the submission is accepted.</p>
+    <form class="" action="index.html" method="post">
+      <fieldset class="timinginfo">
+          <legend>Data Contribution</legend>
+          <label for="doiinput">
+              DOI or URL
+              <input type="text" name="doi" id="doiinput" value="https://doi.org/10.1093/nar/gkac331">
+          </label>
+          <label for="authorinput">
+              Authors
+              <input type="text" name="authors" id="authorinput" value="John Smith and Jane Doe">
+          </label>
+          <label for="yearinput">
+              Publication Year
+              <input type="text" name="year" id="yearinput" value="1984">
+          </label>
+          <br>
+          <label for="data">
+              Data
+              <input type="file" name="data" id="data" value="data">
+          </label>
+          <label class="data" for="metadata">
+              Meta-Data
+              <input type="file" name="metadata" id="data" value="metadata">
+          </label>
+      </fieldset>
+      <fieldset class="additionalinfo">
+          <legend>Additional Information</legend>
+          <label for="why">
+              What data is included in your curation? To what systems will it apply? Why did you curate it?<br>
+              <textarea name="why" rows="8" cols="80"></textarea>
+          </label>
+          <br>
+          <label for="notes">
+              Notes<br>
+              <textarea name="notes" id="notes" rows="4" cols="80"></textarea>
+          </label>
+      </fieldset>
+      <fieldset class="submitbutton">
+          <input type="submit" id="submit" name="submit" value="Submit Request">
+      </fieldset>
+    </form>
+    <h1>Contribute Time</h1>
+    <p>Time is our most limited resource. We welcome eager volunteers, of all experience levels and backgrounds, to improve
+      our open-source offerings. Please elaborate how you are interested to contribute.</p>
+    <fieldset class="jobtype">
+        <legend>Contribution Areas</legend>
+        <label for="area">
+            <input type="checkbox" name="area" id="front" value="House Front">
+            Discovering data
+        </label>
+        <label for="border">
+            <input type="checkbox" name="border" id="border" value="Border">
+            Curating data
+        </label>
+        <label for="multiple">
+            <input type="checkbox" name="multiple" id="multiple" value="Multiple">
+            Dessimination
+        </label>
+        <br>
+        <label for="notes">
+            Other (elaborate)<br>
+            <textarea name="notes" id="notes" rows="4" cols="80"></textarea>
+        </label>
+    </fieldset>
+  <fieldset class="skills">
+      <legend>Relevant Skills</legend>
+      <label for="area">
+          <input type="checkbox" name="area" id="front" value="House Front">
+          Experimental acumen
+      </label>
+      <label for="border">
+          <input type="checkbox" name="border" id="border" value="Border">
+          Biological knowledge
+      </label>
+      <label for="multiple">
+          <input type="checkbox" name="multiple" id="multiple" value="Multiple">
+          Chemical knowledge
+      </label>
+      <label for="multiple">
+          <input type="checkbox" name="multiple" id="multiple" value="Multiple">
+          Programming (Python) aptitude
+      </label>
+      <br>
+      <label for="notes">
+          Other (elaborate)<br>
+          <textarea name="notes" id="notes" rows="4" cols="80"></textarea>
+      </label>
+  </fieldset>
+    <fieldset class="submitbutton">
+        <input type="submit" id="submit" name="submit" value="Submit Request">
+    </fieldset>
   </body>
   <footer>
      <a href="https://www.kbase.us/" target="_blank"><img src="images/Kbase_Logo_280by158-20220124-215636.png" height="100" alt="KBase logo"></a>
