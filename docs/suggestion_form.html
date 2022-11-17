@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8">
+    <title>openTECR search query</title>
+    <link rel="stylesheet" type="text/css" href="styles.css" media="screen" />
+  </head>
+  <body>
+    <nav class="sitenavigation">
+       <img src="images/logo.png" width="80" alt="openTECR logo">
+       <h1><a href="index.html">Query</a></h1>
+       <h1><a href="curation.html">Curation</a></h1>
+       <h1><a href="contribute.html">Contribute</a></h1>
+       <h1><a href="contact.html">Contact</a></h1>
+       <h1><a href="help.html">Help</a></h1>
+       <img src="images/logo.png" width="80" alt="openTECR logo">
+    </nav>
+    <form class="CurationSuggestion" action="results.html">
+      <fieldset class="suggestion">
+          <legend>Curation Suggestion</legend>
+          <label for="doiinput">
+              DOI or URL
+              <input type="text" name="doi" id="doiinput" value="https://doi.org/10.1093/nar/gkac331">
+          </label>
+          <label for="authorinput">
+              Authors
+              <input type="text" name="authors" id="authorinput" value="John Smith and Jane Doe">
+          </label>
+          <label for="yearinput">
+              Publication Year
+              <input type="text" name="year" id="yearinput" value="1984">
+          </label>
+          <label class="data" for="data">
+              Data
+              <input type="file" name="data" id="data" value="data">
+          </label>
+      </fieldset>
+      <fieldset class="additionalinfo">
+          <legend>Additional Information</legend>
+          <label for="why">
+              Why should it be curated?<br>
+              <textarea name="why" rows="8" cols="80"></textarea>
+          </label>
+          <br>
+          <label for="notes">
+              Notes<br>
+              <textarea name="notes" id="notes" rows="4" cols="80"></textarea>
+          </label>
+      </fieldset>
+      <fieldset class="submitbutton">
+          <input type="submit" id="submit" name="submit" value="Submit Request">
+      </fieldset>
+    </form>
+  </body>
+  <footer>
+    <a href="https://www.kbase.us/" target="_blank"><img src="images/Kbase_Logo_280by158-20220124-215636.png" height="100" alt="KBase logo"></a>
+    <a href="https://www.nist.gov/" target="_blank"><img src="images/nist-logo_5.jpg" height="100" alt="NIST logo"></a>
+  </footer>
+</html>
