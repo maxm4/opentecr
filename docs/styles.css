@@ -30,6 +30,9 @@ a:visited {
 a:hover, a:focus {
    color: gray;
 }
+h1.data {
+  padding-bottom: 100px;
+}
 
 /* forms */
 .submitbutton {
@@ -37,6 +40,10 @@ a:hover, a:focus {
 }
 label.data {
   padding-left: 30px;
+}
+label.notes {
+  content: '\a';
+  white-space:pre-line;
 }
 
 /* header */

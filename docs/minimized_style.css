@@ -1,0 +1,71 @@
+html {
+  font-size: 16px;
+}
+
+body {
+  background-color: #c4e0b5;
+  color: #000;
+}
+
+p {
+  font-size: 1.1em;
+  line-height: 1.6em;
+  text-align: justify;
+  text-justify: inter-word;
+}
+
+img {
+  max-width: 60%;
+}
+
+a:link {
+  color: ivory;
+  text-decoration: none;
+}
+
+a:visited {
+  color: #843d0d;
+}
+
+a:hover, a:focus {
+  color: gray;
+}
+
+.submitbutton {
+  margin-bottom: 40px;
+}
+
+label.data {
+  padding-left: 30px;
+}
+
+header h1 {
+  float: left;
+}
+
+nav.sitenavigation {
+  text-align: center;
+  background-color: #4e7b33;
+}
+
+nav.sitenavigation h1 {
+  margin: .3em .5em;
+  vertical-align: middle;
+  display: inline-block;
+}
+
+nav.sitenavigation img {
+  margin: 0 .5em;
+  vertical-align: middle;
+  display: inline-block;
+}
+
+footer {
+  background-color: #4e7b33;
+  text-align: center;
+  padding: 5px;
+}
+
+footer img {
+  padding: 0 3em;
+}
