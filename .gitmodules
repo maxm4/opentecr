@@ -1,0 +1,6 @@
+[submodule "opentecr-schema"]
+	path = opentecr-schema
+	url = https://github.com/maxm4/opentecr-schema
+[submodule "opentecr-data"]
+	path = opentecr-data
+	url = https://github.com/maxm4/opentecr-data
