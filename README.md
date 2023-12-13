@@ -15,7 +15,7 @@ git clone --recurse-submodules https://github.com/maxm4/opentecr
 ## How to serve
 
 ```
-python3 -m http.server 8080 --directory opentecr/www/
+python3 -m http.server 8080 --directory ./www/
 ```
 
 ## Communication
