@@ -6,10 +6,16 @@ We aim to create a reliable, free, machine-actionable data collection of apparen
 
 This database is expected to serve computational and experimental scientists in the fields of metabolic engineering, genome-scale metabolic modelling, biocatalysis and related fields by providing curated information. It will probably be used by eQuilibrator and COBRA as the shared data basis for their individual calculations.
 
+## Clone project with submodules
+
+```
+git clone --recurse-submodules https://github.com/maxm4/opentecr
+```
+
 ## How to serve
 
 ```
-python3 -m http.server 8080 --directory opentecr/docs/
+python3 -m http.server 8080 --directory opentecr/www/
 ```
 
 ## Communication
