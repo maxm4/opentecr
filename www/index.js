@@ -119,7 +119,7 @@ function formatCell(val) {
         const safeval = val.replace(/^http:\/\//i, 'https://');
         return $('<a>').attr({href: safeval, target:'_blank', rel:'noopener'}).text(safeval);
     // reaction equation: a + b = c + d
-    } else if (/\+|=/.test(val) && val.includes('=')) {
+    } else if (/\+|=/.test(val) && val.includes(' = ')) {
         const $span = $('<span>');
         const sides = val.split('=');
         sides.forEach(function(side, si) {
