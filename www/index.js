@@ -7,9 +7,7 @@ function toggle_visibility(id) {
 }
 
 const fromPage = new URLSearchParams(window.location.search).get('from');
-const currentPage = window.location.pathname.split('/').pop() + window.location.search;
 console.log(fromPage)
-console.log(currentPage)
 
 document.addEventListener('DOMContentLoaded', function() {
 
@@ -26,7 +24,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const hasItem = params.has('item');
 
             if (hasItem) {
-                document.getElementById('data-preview').style.display = 'none';
+                document.getElementById('data-preview').style.display = '';
             }
 
             return htmlTableGenerator(result.data).then(() => {
@@ -43,7 +41,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 if (hasItem) {
                     const itemVal = decodeURIComponent(params.get('item'));
-                    const headers = $('#data-table thead th').map((i,el) => $(el).text()).get().slice(0,-1);
+                    const headers = $('#data-table thead th').map((i,el) => $(el).text()).get();
                     $('#data-table').DataTable().rows().every(function() {
                         var key = String(this.data()[0]);
                         var shortKey = key.includes('#') ? key.split('#').slice(1).join('#') : key;
@@ -133,7 +131,7 @@ function formatCell(val) {
                 if (/^kegg:[A-Z]\d+/i.test(compound)) {
                     $a.attr('href', 'compounds.html?kegg=' + encodeURIComponent(compound));
                 } else {
-                    $a.attr('href', 'compounds.html?item=' + encodeURIComponent(compound) + '&from=' + encodeURIComponent(currentPage));
+                    $a.attr('href', 'compounds.html?item=' + encodeURIComponent(compound) + '&from=' + encodeURIComponent(window.location.pathname.split('/').pop() + window.location.search));
                 }
                 $a.text(compound);
                 $span.append($a);
@@ -237,6 +235,12 @@ function openRowDetail(headers, rowData, fromPage) {
         }
     });
 
+
+    // update url
+    var itemKey = rowData[0].includes('#') ? rowData[0].split('#').slice(1).join('#') : rowData[0];
+    history.pushState(null, '', '?item=' + encodeURIComponent(itemKey));
+
+    // draw table
     var table = $('<table>').css({'width':'100%','borderCollapse':'collapse','fontSize':'0.92rem'});
     headers.forEach(function(header, i) {
         var val = rowData[i] || '';
@@ -249,8 +253,4 @@ function openRowDetail(headers, rowData, fromPage) {
 
     $(detail).append(back).append(table);
     $('.card').append(detail);
-
-    // update url
-    var itemKey = rowData[0].includes('#') ? rowData[0].split('#').slice(1).join('#') : rowData[0];
-    history.pushState(null, '', '?item=' + encodeURIComponent(itemKey));
 }
