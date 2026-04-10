@@ -7,7 +7,9 @@ function toggle_visibility(id) {
 }
 
 const fromPage = new URLSearchParams(window.location.search).get('from');
+const currentPage = window.location.pathname.split('/').pop() + window.location.search;
 console.log(fromPage)
+console.log(currentPage)
 
 document.addEventListener('DOMContentLoaded', function() {
 
@@ -131,7 +133,6 @@ function formatCell(val) {
                 if (/^kegg:[A-Z]\d+/i.test(compound)) {
                     $a.attr('href', 'compounds.html?kegg=' + encodeURIComponent(compound));
                 } else {
-                    var currentPage = window.location.pathname.split('/').pop() + window.location.search;
                     $a.attr('href', 'compounds.html?item=' + encodeURIComponent(compound) + '&from=' + encodeURIComponent(currentPage));
                 }
                 $a.text(compound);
