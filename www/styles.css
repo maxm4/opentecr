@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+//@import url('https://cdn.datatables.net/fixedcolumns/3.4.0/css/fixedColumns.dataTables.min.css');
 
 *, *::before, *::after {
   box-sizing: border-box;
@@ -166,6 +167,7 @@ p {
 }
 
 /* ── DataTables overrides ── */
+
 .dataTables_wrapper {
   font-size: 0.88rem;
   color: #2c3e25;
@@ -340,6 +342,11 @@ footer img {
 a { color: #aecfad; }
 a:visited { color: #aecfad; }
 a:hover { color: #aecfad; }
+
+
+table.dataTable a { color: #5a7a4e; }
+table.dataTable a:visited { color: #5a7a4e; }
+table.dataTable  a:hover { color: #5a7a4e; }
 
 img { max-width: 100%; height: auto; }
 
